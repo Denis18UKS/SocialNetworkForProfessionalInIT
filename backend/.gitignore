@@ -1,0 +1,30 @@
+# Конфигурация с секретами
+.env
+
+# Зависимости
+node_modules/
+
+# Загруженные пользователями файлы
+uploads/
+
+# Сборки
+dist/
+build/
+
+# Логи
+*.log
+logs/
+
+# IDE и системные файлы
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Временные файлы
+*.tmp
+*.swp
+
+# Локальные Docker-настройки
+docker-compose.override.yml
+Dockerfile*
