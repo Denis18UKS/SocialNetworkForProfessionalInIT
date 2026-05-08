@@ -40,7 +40,7 @@ const App = () => {
           <BrowserRouter>
             <RealtimeNotifications />
             <SidebarProvider>
-              <div className="min-h-screen flex w-full flex-col md:flex-row">
+              <div className="min-h-screen flex w-full flex-col bg-background md:flex-row dark:bg-gray-950">
                 <AppSidebar />
                 <div className="flex-1 flex flex-col min-h-screen">
                   <Header />

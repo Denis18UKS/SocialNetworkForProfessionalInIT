@@ -1,24 +1,14 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
-import { AlertCircle, CheckCircle2, Code2, Loader2, Play } from "lucide-react";
+import { AlertCircle, CheckCircle2, Code2, ExternalLink, Loader2, Play } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Textarea } from "@/components/ui/textarea";
+import { useToast } from "@/components/ui/use-toast";
+import { CodeLanguage, normalizeCodeLanguage, openCodeInVSCode } from "@/components/CodeSnippet";
 import { useAuth } from "@/pages/AuthContext";
-
-type CompilerLanguage =
-  | "java"
-  | "csharp"
-  | "cpp"
-  | "lua"
-  | "python"
-  | "php"
-  | "javascript"
-  | "nodejs"
-  | "react";
 
 type CompilerStep = {
   command: string;
@@ -34,10 +24,11 @@ type CompilerResult = {
   stdout?: string;
   stderr?: string;
   diagnostics?: string[];
+  friendlyDiagnostics?: string[];
   steps?: CompilerStep[];
 };
 
-const languages: Array<{ id: CompilerLanguage; title: string; hint: string }> = [
+const languages: Array<{ id: CodeLanguage; title: string; hint: string }> = [
   { id: "java", title: "Java", hint: "Класс должен называться Main" },
   { id: "csharp", title: "C#", hint: "Запускается через csc, если он установлен" },
   { id: "cpp", title: "C++", hint: "Компиляция g++ с C++17" },
@@ -49,7 +40,7 @@ const languages: Array<{ id: CompilerLanguage; title: string; hint: string }> = 
   { id: "react", title: "React", hint: "Компиляция JSX через esbuild" },
 ];
 
-const examples: Record<CompilerLanguage, string> = {
+const examples: Record<CodeLanguage, string> = {
   java: `public class Main {
     public static void main(String[] args) {
         System.out.println("Hello from Java");
@@ -74,9 +65,7 @@ int main() {
 echo "Hello from PHP" . PHP_EOL;
 ?>`,
   javascript: `console.log("Hello from JavaScript");`,
-  nodejs: `const http = require("http");
-
-const message = {
+  nodejs: `const message = {
   runtime: "Node.js",
   status: "ok",
 };
@@ -101,7 +90,7 @@ export default App;`,
 };
 
 const getLogText = (result: CompilerResult | null) => {
-  if (!result) return "Запустите код, чтобы увидеть логи компиляции и выполнения.";
+  if (!result) return "Запустите код, чтобы увидеть технические логи компиляции и выполнения.";
 
   const parts = [
     result.stdout ? `STDOUT:\n${result.stdout}` : "",
@@ -115,16 +104,47 @@ const getLogText = (result: CompilerResult | null) => {
   return parts.length > 0 ? parts.join("\n\n") : "Логи пустые.";
 };
 
+const LineNumberedEditor = ({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) => {
+  const lineRef = useRef<HTMLDivElement | null>(null);
+  const lineCount = Math.max(value.split("\n").length, 1);
+
+  return (
+    <div className="grid min-h-[520px] grid-cols-[56px_1fr] overflow-hidden bg-gray-950 font-mono text-sm leading-6">
+      <div ref={lineRef} className="select-none overflow-hidden border-r border-gray-800 bg-gray-900 px-3 py-3 text-right text-gray-500">
+        {Array.from({ length: lineCount }, (_, index) => (
+          <div key={index} className="h-6">
+            {index + 1}
+          </div>
+        ))}
+      </div>
+      <textarea
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        onScroll={(event) => {
+          if (lineRef.current) lineRef.current.scrollTop = event.currentTarget.scrollTop;
+        }}
+        spellCheck={false}
+        className="min-h-[520px] resize-y border-0 bg-gray-950 px-3 py-3 font-mono text-sm leading-6 text-gray-100 outline-none"
+      />
+    </div>
+  );
+};
+
 const OnlineCompiler = () => {
   const { isAuthenticated } = useAuth();
+  const { toast } = useToast();
   const location = useLocation();
   const languageFromState = (location.state as { language?: string } | null)?.language;
-  const initialLanguage = languages.some((language) => language.id === languageFromState)
-    ? (languageFromState as CompilerLanguage)
-    : "javascript";
+  const initialLanguage = normalizeCodeLanguage(languageFromState);
   const initialCode = (location.state as { code?: string } | null)?.code;
-  const [activeLanguage, setActiveLanguage] = useState<CompilerLanguage>(initialLanguage);
-  const [codeByLanguage, setCodeByLanguage] = useState<Record<CompilerLanguage, string>>(() => ({
+  const [activeLanguage, setActiveLanguage] = useState<CodeLanguage>(initialLanguage);
+  const [codeByLanguage, setCodeByLanguage] = useState<Record<CodeLanguage, string>>(() => ({
     ...examples,
     [initialLanguage]: initialCode || examples[initialLanguage],
   }));
@@ -141,6 +161,7 @@ const OnlineCompiler = () => {
       setResult({
         success: false,
         diagnostics: ["Для запуска кода нужно войти в аккаунт."],
+        friendlyDiagnostics: ["Сейчас система не знает, кто вы. Войдите в аккаунт и повторите запуск."],
         stderr: "Авторизация не найдена.",
         steps: [],
       });
@@ -169,11 +190,24 @@ const OnlineCompiler = () => {
       setResult({
         success: false,
         diagnostics: ["Не удалось связаться с backend-компилятором."],
+        friendlyDiagnostics: ["Сервер компилятора сейчас недоступен. Проверьте, запущен ли backend."],
         stderr: error instanceof Error ? error.message : "Неизвестная ошибка",
         steps: [],
       });
     } finally {
       setIsRunning(false);
+    }
+  };
+
+  const openVSCode = async () => {
+    try {
+      await openCodeInVSCode(codeByLanguage[activeLanguage], activeLanguage, `compiler-${activeLanguage}`);
+    } catch (error) {
+      toast({
+        title: "Ошибка",
+        description: error instanceof Error ? error.message : "Не удалось открыть код в VS Code.",
+        variant: "destructive",
+      });
     }
   };
 
@@ -187,20 +221,26 @@ const OnlineCompiler = () => {
             </div>
             <div>
               <h1 className="text-3xl font-bold">Онлайн Компилятор Кода</h1>
-              <p className="text-sm text-muted-foreground">Пишите код, запускайте проверку и смотрите логи ошибок.</p>
+              <p className="text-sm text-muted-foreground">Пишите код, запускайте проверку и смотрите ошибки обычным и техническим языком.</p>
             </div>
           </div>
 
-          <Button onClick={runCode} disabled={isRunning} className="gap-2">
-            {isRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-            Запустить
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={openVSCode} variant="outline" className="gap-2">
+              <ExternalLink className="h-4 w-4" />
+              Открыть в VS Code
+            </Button>
+            <Button onClick={runCode} disabled={isRunning} className="gap-2">
+              {isRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+              Запустить
+            </Button>
+          </div>
         </div>
 
         <Tabs
           value={activeLanguage}
           onValueChange={(value) => {
-            setActiveLanguage(value as CompilerLanguage);
+            setActiveLanguage(value as CodeLanguage);
             setResult(null);
           }}
           className="space-y-4"
@@ -215,7 +255,7 @@ const OnlineCompiler = () => {
 
           {languages.map((language) => (
             <TabsContent key={language.id} value={language.id} className="m-0">
-              <div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(360px,0.75fr)]">
+              <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(360px,0.8fr)]">
                 <Card className="overflow-hidden">
                   <CardHeader className="border-b">
                     <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
@@ -227,16 +267,14 @@ const OnlineCompiler = () => {
                     </div>
                   </CardHeader>
                   <CardContent className="p-0">
-                    <Textarea
+                    <LineNumberedEditor
                       value={codeByLanguage[language.id]}
-                      onChange={(event) =>
+                      onChange={(value) =>
                         setCodeByLanguage((current) => ({
                           ...current,
-                          [language.id]: event.target.value,
+                          [language.id]: value,
                         }))
                       }
-                      spellCheck={false}
-                      className="min-h-[520px] resize-y rounded-none border-0 bg-gray-950 font-mono text-sm leading-6 text-gray-100 focus-visible:ring-0 focus-visible:ring-offset-0"
                     />
                   </CardContent>
                 </Card>
@@ -251,30 +289,36 @@ const OnlineCompiler = () => {
                         : ""
                     }
                   >
-                    {result?.success ? (
-                      <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                    ) : (
-                      <AlertCircle className="h-4 w-4" />
-                    )}
+                    {result?.success ? <CheckCircle2 className="h-4 w-4 text-emerald-500" /> : <AlertCircle className="h-4 w-4" />}
                     <AlertTitle>{result ? (result.success ? "Код выполнен" : "Есть проблема") : "Диагностика"}</AlertTitle>
                     <AlertDescription>
                       <div className="mt-2 space-y-2">
-                        {(result?.diagnostics || ["Здесь появится краткое описание того, что не так в коде."]).map(
-                          (item, index) => (
-                            <p key={`${item}-${index}`}>{item}</p>
-                          )
-                        )}
+                        {(result?.diagnostics || ["Здесь появится краткое техническое описание того, что не так в коде."]).map((item, index) => (
+                          <p key={`${item}-${index}`}>{item}</p>
+                        ))}
                       </div>
                     </AlertDescription>
                   </Alert>
 
-                  <Card className="min-h-[420px]">
+                  <Card>
                     <CardHeader>
-                      <CardTitle>Логи ошибок</CardTitle>
+                      <CardTitle>Ошибки простыми словами</CardTitle>
+                      <CardDescription>Объяснение без сложных терминов.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-2 text-sm">
+                      {(result?.friendlyDiagnostics || ["Запустите код, и здесь появится понятное объяснение ошибки."]).map((item, index) => (
+                        <p key={`${item}-${index}`}>{item}</p>
+                      ))}
+                    </CardContent>
+                  </Card>
+
+                  <Card className="min-h-[360px]">
+                    <CardHeader>
+                      <CardTitle>Технические логи</CardTitle>
                       <CardDescription>Команды, stdout, stderr и код завершения.</CardDescription>
                     </CardHeader>
                     <CardContent>
-                      <pre className="max-h-[520px] overflow-auto whitespace-pre-wrap rounded-md border bg-gray-950 p-4 text-sm leading-6 text-gray-100">
+                      <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap rounded-md border bg-gray-950 p-4 text-sm leading-6 text-gray-100">
                         {getLogText(result)}
                       </pre>
                     </CardContent>

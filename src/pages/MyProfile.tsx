@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { LiquidButton } from "@/components/ui/liquid-button";
-import { Loader2, ChevronUp, GitFork, Star, Download, File, Folder, ChevronLeft } from "lucide-react";
+import { Loader2, ChevronUp, GitFork, Star, Download, File, Folder, ChevronLeft, RefreshCw } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { motion, AnimatePresence } from "framer-motion";
 import { format } from "date-fns";
@@ -21,6 +21,7 @@ interface Repository {
 
 interface User {
   username: string;
+  user_tag?: string | null;
   skills: string;
   avatar: string | null;
   github_username: string;
@@ -57,6 +58,8 @@ const MyProfile = () => {
   const [repoPage, setRepoPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [downloadLoading, setDownloadLoading] = useState(false);
+  const [repoRefreshing, setRepoRefreshing] = useState(false);
+  const [repoCacheVersion, setRepoCacheVersion] = useState(0);
   const [searchTerm, setSearchTerm] = useState("");
   const [showScrollButton, setShowScrollButton] = useState(false);
 
@@ -147,6 +150,45 @@ const MyProfile = () => {
     setFilteredRepositories(source.filter(repo => repo.name.toLowerCase().includes(searchTerm.toLowerCase())));
     setRepoPage(1);
   }, [activeProvider, githubRepositories, gitlabRepositories]);
+
+  const refreshRepositories = async () => {
+    const token = localStorage.getItem("token");
+    if (!token) return;
+
+    setRepoRefreshing(true);
+    try {
+      const response = await fetch(`http://localhost:5000/profile?refresh=1`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        throw new Error(errorData?.message || "Не удалось обновить репозитории.");
+      }
+      const data = await response.json();
+      const github = data.githubRepositories || data.repositories || [];
+      const gitlab = data.gitlabRepositories || [];
+      setUser(data.user);
+      setGithubRepositories(github);
+      setGitlabRepositories(gitlab);
+      const source = activeProvider === "github" ? github : gitlab;
+      setRepositories(source);
+      setFilteredRepositories(source.filter((repo: Repository) => repo.name.toLowerCase().includes(searchTerm.toLowerCase())));
+      setRepoPage(1);
+      setRepoCacheVersion((version) => version + 1);
+      toast({
+        title: "Репозитории обновлены",
+        description: "Звезды и форки подтянуты из GitHub/GitLab.",
+      });
+    } catch (error) {
+      toast({
+        title: "Ошибка",
+        description: "Не удалось обновить репозитории.",
+        variant: "destructive",
+      });
+    } finally {
+      setRepoRefreshing(false);
+    }
+  };
 
   const handleDownload = async (repoName: string) => {
     setDownloadLoading(true);
@@ -262,6 +304,15 @@ const MyProfile = () => {
                     <TabsTrigger value="gitlab" disabled={!user.gitlab_username && gitlabRepositories.length === 0}>GitLab</TabsTrigger>
                   </TabsList>
                 </Tabs>
+                <Button
+                  variant="outline"
+                  onClick={refreshRepositories}
+                  disabled={repoRefreshing}
+                  className="gap-2"
+                >
+                  <RefreshCw className={`h-4 w-4 ${repoRefreshing ? "animate-spin" : ""}`} />
+                  Обновить
+                </Button>
                 <Input
                   type="text"
                   value={searchTerm}
@@ -290,7 +341,7 @@ const MyProfile = () => {
                 <ul className="space-y-6">
                   {filteredRepositories.slice((repoPage - 1) * 10, repoPage * 10).map((repo, index) => (
                     <RepositoryItem
-                      key={repo.name + index}
+                      key={`${activeProvider}-${repo.name}-${repoCacheVersion}`}
                       repo={repo}
                       user={user}
                       provider={activeProvider}
@@ -356,7 +407,7 @@ const RepositoryItem = ({ repo, user, provider, onDownload, downloadLoading }: {
   const fetchBranches = async (repoName: string) => {
     try {
       const response = await fetch(
-        `https://api.github.com/repos/${user.github_username}/${repoName}/branches`
+        `http://localhost:5000/github/repos/${user.github_username}/${repoName}/branches`
       );
       const data = await response.json();
       const branchNames = Array.isArray(data) ? data.map(branch => branch.name) : [];
@@ -364,12 +415,14 @@ const RepositoryItem = ({ repo, user, provider, onDownload, downloadLoading }: {
       if (branchNames.length > 0 && !branchNames.includes(selectedBranch)) {
         setSelectedBranch(branchNames[0]);
       }
+      return branchNames;
     } catch (error) {
       toast({
         title: "Ошибка",
         description: "Не удалось загрузить ветки",
         variant: "destructive",
       });
+      return [];
     }
   };
 
@@ -377,7 +430,7 @@ const RepositoryItem = ({ repo, user, provider, onDownload, downloadLoading }: {
     setActiveSection("commits");
     try {
       const response = await fetch(
-        `https://api.github.com/repos/${user.github_username}/${repoName}/commits?sha=${branch}`
+        `http://localhost:5000/github/repos/${user.github_username}/${repoName}/commits?sha=${branch}`
       );
       const data = await response.json();
       setCommits(Array.isArray(data) ? data : []);
@@ -393,8 +446,10 @@ const RepositoryItem = ({ repo, user, provider, onDownload, downloadLoading }: {
   const fetchFiles = async (repoName: string, path: string = "", branch: string = selectedBranch) => {
     setActiveSection("files");
     try {
+      const encodedPath = path.split("/").filter(Boolean).map(encodeURIComponent).join("/");
+      const pathSuffix = encodedPath ? `/${encodedPath}` : "";
       const response = await fetch(
-        `https://api.github.com/repos/${user.github_username}/${repoName}/contents/${path}?ref=${branch}`
+        `http://localhost:5000/github/repos/${user.github_username}/${repoName}/contents${pathSuffix}?ref=${branch}`
       );
       const data = await response.json();
       setFiles(Array.isArray(data) ? data : []);
@@ -486,12 +541,13 @@ const RepositoryItem = ({ repo, user, provider, onDownload, downloadLoading }: {
                 size="sm"
                 variant={activeSection === "commits" ? "default" : "outline"}
                 className="border-[#6E59A5] text-[#6E59A5] hover:bg-[#6E59A5]/10"
-                onClick={() => {
+                onClick={async () => {
                   if (activeSection === "commits") {
                     setActiveSection(null);
                   } else {
-                    if (branches.length === 0) fetchBranches(repo.name);
-                    fetchCommits(repo.name);
+                    const branchNames = branches.length === 0 ? await fetchBranches(repo.name) : branches;
+                    const branch = branchNames.includes(selectedBranch) ? selectedBranch : (branchNames[0] || selectedBranch);
+                    fetchCommits(repo.name, branch);
                   }
                 }}
               >
@@ -501,12 +557,13 @@ const RepositoryItem = ({ repo, user, provider, onDownload, downloadLoading }: {
                 size="sm"
                 variant={activeSection === "files" ? "default" : "outline"}
                 className="border-[#6E59A5] text-[#6E59A5] hover:bg-[#6E59A5]/10"
-                onClick={() => {
+                onClick={async () => {
                   if (activeSection === "files") {
                     setActiveSection(null);
                   } else {
-                    if (branches.length === 0) fetchBranches(repo.name);
-                    fetchFiles(repo.name);
+                    const branchNames = branches.length === 0 ? await fetchBranches(repo.name) : branches;
+                    const branch = branchNames.includes(selectedBranch) ? selectedBranch : (branchNames[0] || selectedBranch);
+                    fetchFiles(repo.name, "", branch);
                   }
                 }}
               >

@@ -1,19 +1,22 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { ArrowLeft, AtSign, Code, Github, Gitlab, Loader2, Lock, Mail, User } from "lucide-react";
+import { motion } from "framer-motion";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Code, Github, Gitlab, Loader2, Lock, Mail, User } from "lucide-react";
-import { motion } from "framer-motion";
+
+const normalizeUserTag = (value: string) => value.trim().replace(/^@+/, "").toLowerCase();
 
 const EditProfile = () => {
   const [avatar, setAvatar] = useState<File | null>(null);
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
+  const [userTag, setUserTag] = useState("");
   const [githubUsername, setGithubUsername] = useState("");
   const [gitlabUsername, setGitlabUsername] = useState("");
   const [skills, setSkills] = useState("");
@@ -39,12 +42,15 @@ const EditProfile = () => {
           headers: { Authorization: `Bearer ${token}` },
         });
 
-        if (!response.ok) throw new Error("Ошибка при загрузке профиля");
+        if (!response.ok) {
+          throw new Error("Ошибка при загрузке профиля");
+        }
 
         const data = await response.json();
         const user = data.user;
         setEmail(user.email || "");
         setUsername(user.username || "");
+        setUserTag(user.user_tag ? `@${user.user_tag}` : "");
         setGithubUsername(user.github_username || "");
         setGitlabUsername(user.gitlab_username || "");
         setSkills(user.skills || "");
@@ -58,41 +64,46 @@ const EditProfile = () => {
     fetchProfile();
   }, []);
 
+  const validateUserTag = () => {
+    const normalized = normalizeUserTag(userTag);
+    if (!normalized) return true;
+    return /^[a-z0-9_]{3,32}$/.test(normalized);
+  };
+
   const handleSave = async () => {
     const token = localStorage.getItem("token");
     if (!token) {
+      toast({ title: "Ошибка", description: "Пользователь не авторизован", variant: "destructive" });
+      return;
+    }
+
+    if (!validateUserTag()) {
       toast({
         title: "Ошибка",
-        description: "Не удалось сохранить профиль: пользователь не авторизован",
+        description: "@username должен быть от 3 до 32 символов: латиница, цифры и _.",
         variant: "destructive",
       });
       return;
     }
 
-    const wantsPasswordChange = Boolean(currentPassword || newPassword || confirmPassword);
+    const wantsPasswordChange = Boolean(newPassword.trim() || confirmPassword.trim());
     if (wantsPasswordChange) {
       if (!currentPassword || !newPassword || !confirmPassword) {
         toast({
           title: "Ошибка",
-          description: "Заполните текущий пароль, новый пароль и подтверждение",
+          description: "Чтобы изменить пароль, заполните текущий пароль, новый пароль и подтверждение",
           variant: "destructive",
         });
         return;
       }
+
       if (newPassword.length < 6) {
-        toast({
-          title: "Ошибка",
-          description: "Новый пароль должен быть не короче 6 символов",
-          variant: "destructive",
-        });
+        toast({ title: "Ошибка", description: "Новый пароль должен быть не короче 6 символов", variant: "destructive" });
         return;
       }
+
       if (newPassword !== confirmPassword) {
-        toast({
-          title: "Ошибка",
-          description: "Новый пароль и подтверждение не совпадают",
-          variant: "destructive",
-        });
+        toast({ title: "Ошибка", description: "Новый пароль и подтверждение не совпадают", variant: "destructive" });
         return;
       }
     }
@@ -100,10 +111,12 @@ const EditProfile = () => {
     const formData = new FormData();
     if (avatar) formData.append("avatar", avatar);
     formData.append("username", username);
+    formData.append("user_tag", normalizeUserTag(userTag));
     formData.append("github_username", githubUsername);
     formData.append("gitlab_username", gitlabUsername);
     formData.append("skills", skills);
     formData.append("email", email);
+
     if (wantsPasswordChange) {
       formData.append("currentPassword", currentPassword);
       formData.append("newPassword", newPassword);
@@ -143,11 +156,7 @@ const EditProfile = () => {
     if (!file) return;
 
     if (!file.type.startsWith("image/")) {
-      toast({
-        title: "Ошибка",
-        description: "Пожалуйста, выберите изображение",
-        variant: "destructive",
-      });
+      toast({ title: "Ошибка", description: "Пожалуйста, выберите изображение", variant: "destructive" });
       return;
     }
 
@@ -166,11 +175,7 @@ const EditProfile = () => {
     <div className="min-h-screen bg-gray-50 px-4 py-8 dark:bg-gray-900 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-3xl space-y-6">
         <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>
-          <Button
-            variant="ghost"
-            onClick={() => navigate(-1)}
-            className="flex items-center gap-2 text-[#6E59A5] hover:bg-[#6E59A5]/10"
-          >
+          <Button variant="ghost" onClick={() => navigate(-1)} className="flex items-center gap-2 text-[#6E59A5] hover:bg-[#6E59A5]/10">
             <ArrowLeft className="h-5 w-5" />
             Назад к профилю
           </Button>
@@ -181,7 +186,7 @@ const EditProfile = () => {
             <CardHeader>
               <CardTitle className="text-2xl text-[#6E59A5]">Редактирование профиля</CardTitle>
               <CardDescription className="text-gray-600 dark:text-gray-400">
-                Обновите личные данные и пароль аккаунта
+                Обновите личные данные и @username для упоминаний. Пароль менять необязательно.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -197,10 +202,7 @@ const EditProfile = () => {
                         </AvatarFallback>
                       )}
                     </Avatar>
-                    <label
-                      htmlFor="avatar-upload"
-                      className="absolute inset-0 flex cursor-pointer items-center justify-center rounded-full bg-black/50 opacity-0 transition-opacity group-hover:opacity-100"
-                    >
+                    <label htmlFor="avatar-upload" className="absolute inset-0 flex cursor-pointer items-center justify-center rounded-full bg-black/50 opacity-0 transition-opacity group-hover:opacity-100">
                       <span className="text-sm font-medium text-white">Изменить</span>
                     </label>
                   </div>
@@ -222,6 +224,17 @@ const EditProfile = () => {
                       Имя пользователя
                     </Label>
                     <Input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="Введите имя пользователя" />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label className="flex items-center gap-2 text-gray-700 dark:text-gray-300">
+                      <AtSign className="h-5 w-5 text-[#6E59A5]" />
+                      @username
+                    </Label>
+                    <Input value={userTag} onChange={(event) => setUserTag(event.target.value)} placeholder="@itbird_user" />
+                    <p className="text-xs text-muted-foreground">
+                      Используется для упоминаний в групповых чатах. Можно оставить пустым.
+                    </p>
                   </div>
 
                   <div className="space-y-2">
@@ -265,7 +278,7 @@ const EditProfile = () => {
                         Изменение пароля
                       </h3>
                       <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                        Оставьте поля пустыми, если не хотите менять пароль.
+                        Не заполняйте новый пароль и подтверждение, если хотите изменить только профиль.
                       </p>
                     </div>
 
@@ -275,7 +288,7 @@ const EditProfile = () => {
                         type="password"
                         value={currentPassword}
                         onChange={(event) => setCurrentPassword(event.target.value)}
-                        placeholder="Введите текущий пароль"
+                        placeholder="Нужен только для смены пароля"
                         autoComplete="current-password"
                       />
                     </div>
@@ -287,11 +300,10 @@ const EditProfile = () => {
                           type="password"
                           value={newPassword}
                           onChange={(event) => setNewPassword(event.target.value)}
-                          placeholder="Минимум 6 символов"
+                          placeholder="Оставьте пустым, если не меняете"
                           autoComplete="new-password"
                         />
                       </div>
-
                       <div className="space-y-2">
                         <Label className="text-gray-700 dark:text-gray-300">Повторите новый пароль</Label>
                         <Input
@@ -305,23 +317,14 @@ const EditProfile = () => {
                     </div>
                   </div>
 
-                  {error && (
-                    <div className="rounded-lg bg-red-50 p-4 text-red-600 dark:bg-red-900/20 dark:text-red-400">
-                      {error}
-                    </div>
-                  )}
+                  {error && <div className="rounded-lg bg-red-50 p-4 text-red-600 dark:bg-red-900/20 dark:text-red-400">{error}</div>}
                 </div>
 
                 <div className="flex flex-col gap-4 pt-4 sm:flex-row">
                   <Button onClick={handleSave} className="bg-[#6E59A5] text-white shadow-lg hover:bg-[#5a4a8a]" size="lg">
                     Сохранить изменения
                   </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => navigate("/profile")}
-                    className="border-[#6E59A5] text-[#6E59A5] hover:bg-[#6E59A5]/10"
-                    size="lg"
-                  >
+                  <Button variant="outline" onClick={() => navigate("/profile")} className="border-[#6E59A5] text-[#6E59A5] hover:bg-[#6E59A5]/10" size="lg">
                     Отменить
                   </Button>
                 </div>

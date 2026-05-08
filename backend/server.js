@@ -97,6 +97,7 @@ const removeOnlineSocket = (ws) => {
 };
 
 const getOnlineUserIds = () => Array.from(onlineUsers.keys());
+const isUserOnline = (userId) => onlineUsers.has(Number(userId));
 
 wss.on('connection', (ws) => {
     console.log('WebSocket client connected');
@@ -166,6 +167,76 @@ const hasUserBlockBetween = async (firstUserId, secondUserId) => {
     return blocks.length > 0;
 };
 
+const normalizeUserTag = (value) => {
+    if (value === undefined || value === null) return null;
+    const normalized = String(value).trim().replace(/^@+/, '').toLowerCase();
+    return normalized || null;
+};
+
+const isValidUserTag = (value) => !value || /^[a-z0-9_]{3,32}$/.test(value);
+
+const extractMentionTags = (text = '') => {
+    const tags = new Set();
+    const regex = /@([a-zA-Z0-9_]{3,32})/g;
+    let match;
+
+    while ((match = regex.exec(text))) {
+        const tag = normalizeUserTag(match[1]);
+        if (tag && tag !== 'everyone') tags.add(tag);
+    }
+
+    return Array.from(tags);
+};
+
+const sendOfflineEmailNotification = async (userId, subject, text) => {
+    if (isUserOnline(userId)) return;
+
+    try {
+        const [users] = await db.query('SELECT email, username FROM users WHERE id = ?', [userId]);
+        if (users.length === 0 || !users[0].email) return;
+
+        await transporter.sendMail({
+            from: '"IT-BIRD" <den4ik200518@mail.ru>',
+            to: users[0].email,
+            subject,
+            text: `Здравствуйте, ${users[0].username}!\n\n${text}\n\nIT-BIRD`,
+        });
+    } catch (error) {
+        console.error('Offline email notification error:', error.message);
+    }
+};
+
+const notifyOfflineUsersByEmail = async (userIds, subject, text) => {
+    await Promise.all(
+        Array.from(new Set(userIds.map(Number).filter(Boolean))).map((userId) =>
+            sendOfflineEmailNotification(userId, subject, text)
+        )
+    );
+};
+
+const resolveGroupMentionRecipients = async (chatId, message, senderId) => {
+    if (!message) return [];
+
+    const [members] = await db.query(
+        `SELECT u.id, u.username, u.user_tag
+        FROM group_chat_members gcm
+        JOIN users u ON u.id = gcm.user_id
+        WHERE gcm.group_chat_id = ? AND u.id != ?`,
+        [chatId, senderId]
+    );
+
+    if (/@everyone\b/i.test(message)) {
+        return members.map((member) => member.id);
+    }
+
+    const tags = extractMentionTags(message);
+    if (tags.length === 0) return [];
+
+    return members
+        .filter((member) => member.user_tag && tags.includes(String(member.user_tag).toLowerCase()))
+        .map((member) => member.id);
+};
+
 const getBlockStatusBetween = async (currentUserId, otherUserId) => {
     const [blocks] = await db.query(
         `SELECT blocker_id, blocked_id FROM user_blacklist
@@ -230,8 +301,45 @@ const addColumnIfMissing = async (table, column, definition) => {
     }
 };
 
+const addIndexIfMissing = async (table, indexName, definition) => {
+    try {
+        const [indexes] = await db.query(`SHOW INDEX FROM ${table} WHERE Key_name = ?`, [indexName]);
+        if (indexes.length === 0) {
+            await db.query(`ALTER TABLE ${table} ADD ${definition}`);
+        }
+    } catch (error) {
+        if (!['ER_DUP_KEYNAME', 'ER_DUP_ENTRY'].includes(error.code)) {
+            console.warn(`Не удалось добавить индекс ${table}.${indexName}:`, error.message);
+        }
+    }
+};
+
+const cleanupDuplicateUserTags = async () => {
+    const [duplicates] = await db.query(`
+        SELECT user_tag
+        FROM users
+        WHERE user_tag IS NOT NULL AND user_tag != ''
+        GROUP BY user_tag
+        HAVING COUNT(*) > 1
+    `);
+
+    for (const duplicate of duplicates) {
+        const [users] = await db.query(
+            'SELECT id FROM users WHERE user_tag = ? ORDER BY id ASC',
+            [duplicate.user_tag]
+        );
+        const duplicateIds = users.slice(1).map((user) => user.id);
+        if (duplicateIds.length > 0) {
+            await db.query('UPDATE users SET user_tag = NULL WHERE id IN (?)', [duplicateIds]);
+        }
+    }
+};
+
 const ensureSchema = async () => {
     await addColumnIfMissing('users', 'gitlab_username', 'VARCHAR(255) NULL');
+    await addColumnIfMissing('users', 'user_tag', 'VARCHAR(32) NULL');
+    await cleanupDuplicateUserTags();
+    await addIndexIfMissing('users', 'unique_user_tag', 'UNIQUE KEY unique_user_tag (user_tag)');
     await addColumnIfMissing('repositories', 'provider', "VARCHAR(20) NOT NULL DEFAULT 'github'");
     await addColumnIfMissing('repositories', 'language', 'VARCHAR(100) NULL');
     await addColumnIfMissing('repositories', 'stargazers_count', 'INT NOT NULL DEFAULT 0');
@@ -251,6 +359,46 @@ const ensureSchema = async () => {
     await addColumnIfMissing('group_chat_messages', 'is_pinned', 'BOOLEAN NOT NULL DEFAULT FALSE');
     await addColumnIfMissing('group_chat_messages', 'pinned_at', 'DATETIME NULL');
     await addColumnIfMissing('group_chat_messages', 'pinned_by', 'INT NULL');
+
+    await db.query(`CREATE TABLE IF NOT EXISTS github_repo_branches (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        repo_name VARCHAR(255) NOT NULL,
+        branch_name VARCHAR(255) NOT NULL,
+        is_default BOOLEAN NOT NULL DEFAULT FALSE,
+        last_synced DATETIME NOT NULL,
+        UNIQUE KEY unique_cached_branch (user_id, repo_name, branch_name)
+    )`);
+
+    await db.query(`CREATE TABLE IF NOT EXISTS github_repo_commits (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        repo_name VARCHAR(255) NOT NULL,
+        branch_name VARCHAR(255) NOT NULL,
+        sha VARCHAR(80) NOT NULL,
+        message TEXT NULL,
+        author_name VARCHAR(255) NULL,
+        author_avatar VARCHAR(500) NULL,
+        commit_date DATETIME NULL,
+        html_url VARCHAR(500) NULL,
+        last_synced DATETIME NOT NULL,
+        UNIQUE KEY unique_cached_commit (user_id, repo_name, branch_name, sha)
+    )`);
+
+    await db.query(`CREATE TABLE IF NOT EXISTS github_repo_files (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        repo_name VARCHAR(255) NOT NULL,
+        branch_name VARCHAR(255) NOT NULL,
+        path_key VARCHAR(500) NOT NULL,
+        file_path VARCHAR(500) NOT NULL,
+        file_name VARCHAR(255) NOT NULL,
+        file_type VARCHAR(20) NOT NULL,
+        download_url VARCHAR(1000) NULL,
+        html_url VARCHAR(1000) NULL,
+        last_synced DATETIME NOT NULL,
+        UNIQUE KEY unique_cached_file (user_id, repo_name(191), branch_name(191), path_key(191), file_path(191))
+    )`);
 
     await db.query(`CREATE TABLE IF NOT EXISTS user_blacklist (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -309,8 +457,8 @@ const normalizeRepo = (repo, provider) => ({
     name: repo.name || repo.path || repo.path_with_namespace,
     html_url: repo.html_url || repo.web_url,
     language: repo.language || null,
-    stargazers_count: repo.stargazers_count || repo.star_count || 0,
-    forks_count: repo.forks_count || repo.forks || 0,
+    stargazers_count: Number(repo.stargazers_count ?? repo.watchers_count ?? repo.star_count ?? 0),
+    forks_count: Number(repo.forks_count ?? repo.forks ?? 0),
 });
 
 const fetchPaginatedRepos = async (provider, username) => {
@@ -370,10 +518,14 @@ const getCachedRepositories = async (userId, provider) => {
     return repos;
 };
 
-const getRepositoriesForUser = async (userId, provider, username) => {
+const getRepositoriesForUser = async (userId, provider, username, options = {}) => {
+    const { forceRefresh = false, failOnRefreshError = false } = options;
     let cached = await getCachedRepositories(userId, provider);
-    if (cached.length > 0) return cached;
     if (!username) return [];
+
+    const shouldRefresh = forceRefresh || cached.length === 0;
+
+    if (!shouldRefresh) return cached;
 
     try {
         const fresh = await fetchPaginatedRepos(provider, username);
@@ -381,9 +533,224 @@ const getRepositoriesForUser = async (userId, provider, username) => {
         cached = await getCachedRepositories(userId, provider);
     } catch (error) {
         console.error(`Ошибка получения ${provider} репозиториев:`, error.message);
+        if (forceRefresh && failOnRefreshError) {
+            const status = error.response?.status;
+            const rateLimitRemaining = error.response?.headers?.['x-ratelimit-remaining'];
+            const rateLimitReset = error.response?.headers?.['x-ratelimit-reset'];
+            const resetDate = rateLimitReset
+                ? new Date(Number(rateLimitReset) * 1000).toLocaleString('ru-RU')
+                : null;
+
+            if (status === 403 && rateLimitRemaining === '0') {
+                const suffix = resetDate ? ` Лимит обновится: ${resetDate}.` : '';
+                throw new Error(`GitHub API временно недоступен: превышен лимит запросов.${suffix}`);
+            }
+
+            throw new Error(`Не удалось обновить ${provider === 'github' ? 'GitHub' : 'GitLab'} репозитории`);
+        }
     }
 
     return cached;
+};
+
+const getUserForGithubUsername = async (githubUsername) => {
+    const [users] = await db.query(
+        'SELECT id, github_username FROM users WHERE github_username = ? LIMIT 1',
+        [githubUsername]
+    );
+    return users[0] || null;
+};
+
+const normalizeGithubBranch = (branch) => ({
+    name: branch.name,
+    commit: branch.commit || null,
+    protected: Boolean(branch.protected),
+});
+
+const getCachedGithubBranches = async (userId, repoName) => {
+    const [branches] = await db.query(
+        `SELECT branch_name AS name
+        FROM github_repo_branches
+        WHERE user_id = ? AND repo_name = ?
+        ORDER BY is_default DESC, branch_name ASC`,
+        [userId, repoName]
+    );
+    return branches;
+};
+
+const saveGithubBranches = async (userId, repoName, branches, defaultBranch = null) => {
+    const lastSynced = new Date();
+    await db.query('DELETE FROM github_repo_branches WHERE user_id = ? AND repo_name = ?', [userId, repoName]);
+
+    for (const branch of branches) {
+        await db.query(
+            `INSERT INTO github_repo_branches (user_id, repo_name, branch_name, is_default, last_synced)
+            VALUES (?, ?, ?, ?, ?)`,
+            [userId, repoName, branch.name, branch.name === defaultBranch, lastSynced]
+        );
+    }
+};
+
+const getGithubBranchesForRepo = async (userId, githubUsername, repoName, options = {}) => {
+    const { forceRefresh = false } = options;
+    const cached = await getCachedGithubBranches(userId, repoName);
+    if (!forceRefresh && cached.length > 0) return cached;
+
+    const [{ data: branches }, { data: repo }] = await Promise.all([
+        axios.get(`https://api.github.com/repos/${encodeURIComponent(githubUsername)}/${encodeURIComponent(repoName)}/branches`, { headers: githubHeaders }),
+        axios.get(`https://api.github.com/repos/${encodeURIComponent(githubUsername)}/${encodeURIComponent(repoName)}`, { headers: githubHeaders }),
+    ]);
+    const normalized = Array.isArray(branches) ? branches.map(normalizeGithubBranch) : [];
+    await saveGithubBranches(userId, repoName, normalized, repo.default_branch);
+    return getCachedGithubBranches(userId, repoName);
+};
+
+const normalizeGithubCommit = (commit) => ({
+    sha: commit.sha,
+    message: commit.commit?.message || '',
+    author_name: commit.commit?.author?.name || commit.author?.login || null,
+    author_avatar: commit.author?.avatar_url || null,
+    commit_date: commit.commit?.author?.date ? new Date(commit.commit.author.date) : null,
+    html_url: commit.html_url || null,
+});
+
+const getCachedGithubCommits = async (userId, repoName, branch) => {
+    const [commits] = await db.query(
+        `SELECT sha, message, author_name, author_avatar, commit_date, html_url
+        FROM github_repo_commits
+        WHERE user_id = ? AND repo_name = ? AND branch_name = ?
+        ORDER BY commit_date DESC, id DESC
+        LIMIT 100`,
+        [userId, repoName, branch]
+    );
+
+    return commits.map((commit) => ({
+        sha: commit.sha,
+        html_url: commit.html_url,
+        commit: {
+            message: commit.message,
+            author: {
+                name: commit.author_name,
+                date: commit.commit_date,
+            },
+        },
+        author: commit.author_avatar ? { avatar_url: commit.author_avatar } : null,
+    }));
+};
+
+const saveGithubCommits = async (userId, repoName, branch, commits) => {
+    const lastSynced = new Date();
+    await db.query(
+        'DELETE FROM github_repo_commits WHERE user_id = ? AND repo_name = ? AND branch_name = ?',
+        [userId, repoName, branch]
+    );
+
+    for (const commit of commits) {
+        const normalized = normalizeGithubCommit(commit);
+        await db.query(
+            `INSERT INTO github_repo_commits
+            (user_id, repo_name, branch_name, sha, message, author_name, author_avatar, commit_date, html_url, last_synced)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+                userId,
+                repoName,
+                branch,
+                normalized.sha,
+                normalized.message,
+                normalized.author_name,
+                normalized.author_avatar,
+                normalized.commit_date,
+                normalized.html_url,
+                lastSynced,
+            ]
+        );
+    }
+};
+
+const getGithubCommitsForRepo = async (userId, githubUsername, repoName, branch, options = {}) => {
+    const { forceRefresh = false } = options;
+    const cached = await getCachedGithubCommits(userId, repoName, branch);
+    if (!forceRefresh && cached.length > 0) return cached;
+
+    const { data } = await axios.get(
+        `https://api.github.com/repos/${encodeURIComponent(githubUsername)}/${encodeURIComponent(repoName)}/commits?sha=${encodeURIComponent(branch)}&per_page=100`,
+        { headers: githubHeaders }
+    );
+    const commits = Array.isArray(data) ? data : [];
+    await saveGithubCommits(userId, repoName, branch, commits);
+    return getCachedGithubCommits(userId, repoName, branch);
+};
+
+const normalizeGithubFile = (file) => ({
+    name: file.name,
+    path: file.path,
+    type: file.type,
+    download_url: file.download_url || null,
+    html_url: file.html_url || null,
+});
+
+const getCachedGithubFiles = async (userId, repoName, branch, pathKey) => {
+    const [files] = await db.query(
+        `SELECT file_name AS name, file_path AS path, file_type AS type, download_url, html_url
+        FROM github_repo_files
+        WHERE user_id = ? AND repo_name = ? AND branch_name = ? AND path_key = ?
+        ORDER BY file_type ASC, file_name ASC`,
+        [userId, repoName, branch, pathKey]
+    );
+    return files;
+};
+
+const saveGithubFiles = async (userId, repoName, branch, pathKey, files) => {
+    const lastSynced = new Date();
+    await db.query(
+        'DELETE FROM github_repo_files WHERE user_id = ? AND repo_name = ? AND branch_name = ? AND path_key = ?',
+        [userId, repoName, branch, pathKey]
+    );
+
+    for (const file of files) {
+        const normalized = normalizeGithubFile(file);
+        await db.query(
+            `INSERT INTO github_repo_files
+            (user_id, repo_name, branch_name, path_key, file_path, file_name, file_type, download_url, html_url, last_synced)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+                userId,
+                repoName,
+                branch,
+                pathKey,
+                normalized.path,
+                normalized.name,
+                normalized.type,
+                normalized.download_url,
+                normalized.html_url,
+                lastSynced,
+            ]
+        );
+    }
+};
+
+const getGithubFilesForRepo = async (userId, githubUsername, repoName, branch, pathKey = '', options = {}) => {
+    const { forceRefresh = false } = options;
+    const normalizedPath = pathKey || '';
+    const cached = await getCachedGithubFiles(userId, repoName, branch, normalizedPath);
+    if (!forceRefresh && cached.length > 0) return cached;
+
+    const urlPath = normalizedPath ? `/${normalizedPath.split('/').map(encodeURIComponent).join('/')}` : '';
+    const { data } = await axios.get(
+        `https://api.github.com/repos/${encodeURIComponent(githubUsername)}/${encodeURIComponent(repoName)}/contents${urlPath}?ref=${encodeURIComponent(branch)}`,
+        { headers: githubHeaders }
+    );
+    const files = Array.isArray(data) ? data : [data];
+    await saveGithubFiles(userId, repoName, branch, normalizedPath, files);
+    return getCachedGithubFiles(userId, repoName, branch, normalizedPath);
+};
+
+const clearGithubDetailsCache = async (userId) => {
+    await Promise.all([
+        db.query('DELETE FROM github_repo_branches WHERE user_id = ?', [userId]),
+        db.query('DELETE FROM github_repo_commits WHERE user_id = ?', [userId]),
+        db.query('DELETE FROM github_repo_files WHERE user_id = ?', [userId]),
+    ]);
 };
 
 // Вспомогательная функция для генерации токена
@@ -403,6 +770,18 @@ const compilerLanguages = {
     javascript: { label: 'JavaScript', filename: 'main.js' },
     nodejs: { label: 'Node.js', filename: 'app.js' },
     react: { label: 'React', filename: 'App.jsx' },
+};
+
+const compilerExtensions = {
+    java: 'java',
+    csharp: 'cs',
+    cpp: 'cpp',
+    lua: 'lua',
+    python: 'py',
+    php: 'php',
+    javascript: 'js',
+    nodejs: 'js',
+    react: 'jsx',
 };
 
 const runProcess = (command, args, cwd, timeoutMs = 8000) => new Promise((resolve) => {
@@ -477,6 +856,47 @@ const buildDiagnostics = (steps, language) => {
     return diagnostics;
 };
 
+const buildFriendlyDiagnostics = (steps, language) => {
+    if (!Array.isArray(steps) || steps.length === 0) {
+        return ['Пока нет результата. Запустите код, и здесь появится объяснение простыми словами.'];
+    }
+
+    const failedStep = steps.find((step) => step.missingTool || step.timedOut || (step.exitCode && step.exitCode !== 0));
+    if (!failedStep) {
+        return ['Код выглядит рабочим: компилятор не сообщил о критичных ошибках.'];
+    }
+
+    if (failedStep.missingTool) {
+        return [`На сервере не найден инструмент для ${language}. Его нужно установить и добавить в PATH.`];
+    }
+
+    if (failedStep.timedOut) {
+        return ['Код выполнялся слишком долго. Частая причина: бесконечный цикл или программа ждёт ввод, которого нет.'];
+    }
+
+    const text = `${failedStep.stderr || ''}\n${failedStep.stdout || ''}`;
+    const lineMatch = text.match(/(?:line|строка|:)(\d+)/i) || text.match(/\((\d+),\d+\)/);
+    const lineHint = lineMatch?.[1] ? ` Примерное место: строка ${lineMatch[1]}.` : '';
+
+    if (/syntax|expected|unexpected|parse|синтак/i.test(text)) {
+        return [`Похоже на синтаксическую ошибку: где-то пропущена скобка, кавычка, точка с запятой или написано лишнее слово.${lineHint}`];
+    }
+
+    if (/not defined|undefined|cannot find|не найден|undeclared|nameerror/i.test(text)) {
+        return [`Похоже, используется имя, которое программа не знает. Проверьте название переменной, функции, класса или импорт.${lineHint}`];
+    }
+
+    if (/type|cannot convert|incompatible|тип/i.test(text)) {
+        return [`Похоже, программа получила значение не того типа. Проверьте числа, строки, массивы и возвращаемые значения.${lineHint}`];
+    }
+
+    if (/permission|access|denied/i.test(text)) {
+        return ['Программе не хватило прав на действие с файлом или командой. Проверьте доступы и путь.'];
+    }
+
+    return [`Код не запустился. Посмотрите технический лог ниже: там есть точный текст ошибки от компилятора.${lineHint}`];
+};
+
 const compileReactCode = async (code) => {
     if (!esbuild) {
         return {
@@ -484,6 +904,7 @@ const compileReactCode = async (code) => {
             stdout: '',
             stderr: 'esbuild не найден. Установите зависимости проекта, чтобы компилировать React/JSX.',
             diagnostics: ['React-компиляция требует пакет esbuild из зависимостей frontend.'],
+            friendlyDiagnostics: ['Сервер пока не умеет проверять React, потому что не найден пакет esbuild. Установите зависимости frontend.'],
             steps: [{ command: 'esbuild transform', stdout: '', stderr: 'esbuild не найден', exitCode: 1, missingTool: true }],
         };
     }
@@ -502,6 +923,7 @@ const compileReactCode = async (code) => {
             stdout: transformed.code,
             stderr: '',
             diagnostics: ['React/JSX успешно скомпилирован. Результат показан в stdout.'],
+            friendlyDiagnostics: ['React-код успешно превратился в обычный JavaScript. Синтаксических проблем не найдено.'],
             steps: [{ command: 'esbuild transform --loader=jsx --jsx=automatic', stdout: transformed.code, stderr: '', exitCode: 0 }],
         };
     } catch (error) {
@@ -510,6 +932,7 @@ const compileReactCode = async (code) => {
             stdout: '',
             stderr: error.message,
             diagnostics: ['React/JSX не скомпилировался. Проверьте синтаксис компонента и импортов.'],
+            friendlyDiagnostics: ['React не смог разобрать JSX. Проверьте закрывающие теги, фигурные скобки и import/export.'],
             steps: [{ command: 'esbuild transform --loader=jsx --jsx=automatic', stdout: '', stderr: error.message, exitCode: 1 }],
         };
     }
@@ -518,15 +941,30 @@ const compileReactCode = async (code) => {
 const runCompilerJob = async (language, code) => {
     const config = compilerLanguages[language];
     if (!config) {
-        return { success: false, diagnostics: ['Неподдерживаемый язык.'], steps: [] };
+        return {
+            success: false,
+            diagnostics: ['Неподдерживаемый язык.'],
+            friendlyDiagnostics: ['Этот язык сейчас не подключен к компилятору. Выберите другой язык во вкладках.'],
+            steps: [],
+        };
     }
 
     if (typeof code !== 'string' || code.trim().length === 0) {
-        return { success: false, diagnostics: ['Код пустой.'], steps: [] };
+        return {
+            success: false,
+            diagnostics: ['Код пустой.'],
+            friendlyDiagnostics: ['Поле кода пустое. Вставьте или напишите код и запустите снова.'],
+            steps: [],
+        };
     }
 
     if (Buffer.byteLength(code, 'utf8') > 200000) {
-        return { success: false, diagnostics: ['Код слишком большой. Максимум 200 КБ.'], steps: [] };
+        return {
+            success: false,
+            diagnostics: ['Код слишком большой. Максимум 200 КБ.'],
+            friendlyDiagnostics: ['Кода слишком много для одного запуска. Попробуйте уменьшить пример.'],
+            steps: [],
+        };
     }
 
     if (language === 'react') {
@@ -567,6 +1005,7 @@ const runCompilerJob = async (language, code) => {
             stdout: steps.map((step) => step.stdout).filter(Boolean).join('\n'),
             stderr: steps.map((step) => step.stderr).filter(Boolean).join('\n'),
             diagnostics: buildDiagnostics(steps, config.label),
+            friendlyDiagnostics: buildFriendlyDiagnostics(steps, config.label),
             steps,
         };
     } finally {
@@ -618,22 +1057,68 @@ app.post('/compiler/run', verifyToken, async (req, res) => {
     }
 });
 
+app.post('/code/open-vscode', verifyToken, async (req, res) => {
+    const { language, code, source } = req.body;
+    const normalizedLanguage = compilerLanguages[language] ? language : 'javascript';
+
+    if (typeof code !== 'string' || code.trim().length === 0) {
+        return res.status(400).json({ message: 'Код пустой' });
+    }
+
+    if (Buffer.byteLength(code, 'utf8') > 200000) {
+        return res.status(400).json({ message: 'Код слишком большой. Максимум 200 КБ.' });
+    }
+
+    try {
+        const codeDir = path.join(__dirname, 'uploads', 'code');
+        await fs.promises.mkdir(codeDir, { recursive: true });
+
+        const extension = compilerExtensions[normalizedLanguage] || 'txt';
+        const safeSource = String(source || 'itbird-code').replace(/[^a-z0-9_-]/gi, '-').slice(0, 40);
+        const filename = `${Date.now()}-${safeSource}.${extension}`;
+        const filePath = path.join(codeDir, filename);
+
+        await fs.promises.writeFile(filePath, code, 'utf8');
+
+        const normalizedPath = filePath.replace(/\\/g, '/');
+        res.json({
+            filePath,
+            vscodeUrl: `vscode://file/${encodeURI(normalizedPath)}`,
+        });
+    } catch (error) {
+        console.error('Open VS Code file error:', error);
+        res.status(500).json({ message: 'Не удалось подготовить файл для VS Code' });
+    }
+});
+
 // Регистрация пользователя
 app.post('/register', async (req, res) => {
     const { username, email, password, github_username, gitlab_username } = req.body;
+    const userTag = normalizeUserTag(req.body.user_tag);
 
     if (!username || !email || !password) {
         return res.status(400).json({ message: 'Поля username, email и password обязательны!' });
     }
 
+    if (!isValidUserTag(userTag)) {
+        return res.status(400).json({ message: '@username должен быть от 3 до 32 символов: латиница, цифры и _' });
+    }
+
     try {
         // Проверка на существующего пользователя с таким email
         const [existingUserEmail] = await db.query('SELECT id FROM users WHERE email = ?', [email]);
-        const [existingUserGitHub] = await db.query('SELECT id FROM users WHERE github_username = ?', [github_username]);
+        const [existingUserGitHub] = github_username
+            ? await db.query('SELECT id FROM users WHERE github_username = ?', [github_username])
+            : [[]];
+        const [existingUserTag] = userTag
+            ? await db.query('SELECT id FROM users WHERE user_tag = ?', [userTag])
+            : [[]];
         if (existingUserEmail.length > 0) {
             return res.status(400).json({ message: 'Пользователь с таким email уже существует!' });
         } else if (existingUserGitHub.length > 0) {
             return res.status(400).json({ message: 'Пользователь с таким GitHub Username уже существует!' });
+        } else if (existingUserTag.length > 0) {
+            return res.status(400).json({ message: 'Этот @username уже занят!' });
         }
 
         // Хеширование пароля
@@ -641,8 +1126,8 @@ app.post('/register', async (req, res) => {
 
         // Вставка нового пользователя в базу данных
         const [result] = await db.query(
-            'INSERT INTO users (username, email, password, github_username, gitlab_username, avatar) VALUES (?, ?, ?, ?, ?, ?)',
-            [username, email, hashedPassword, github_username || null, gitlab_username || github_username || null, '/uploads/avatar-default.png']
+            'INSERT INTO users (username, email, password, github_username, gitlab_username, user_tag, avatar) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [username, email, hashedPassword, github_username || null, gitlab_username || github_username || null, userTag, '/uploads/avatar-default.png']
         );
 
         // Получаем репозитории с GitHub, если github_username передан
@@ -695,9 +1180,10 @@ app.post('/login', async (req, res) => {
 
     try {
         // Пытаемся найти пользователя либо по email, либо по username
+        const normalizedTag = normalizeUserTag(emailOrUsername);
         const [users] = await db.query(
-            'SELECT id, email, username, role, password, isBlocked, github_username, gitlab_username FROM users WHERE email = ? OR username = ?',
-            [emailOrUsername, emailOrUsername]
+            'SELECT id, email, username, role, password, isBlocked, github_username, gitlab_username, user_tag FROM users WHERE email = ? OR username = ? OR user_tag = ?',
+            [emailOrUsername, emailOrUsername, normalizedTag]
         );
 
         if (users.length === 0) {
@@ -718,6 +1204,7 @@ app.post('/login', async (req, res) => {
                 id: users[0].id,
                 email: users[0].email,
                 username: users[0].username,
+                user_tag: users[0].user_tag,
                 role: users[0].role || 'user',
             },
             process.env.JWT_SECRET,
@@ -746,6 +1233,7 @@ app.post('/login', async (req, res) => {
             user: {
                 id: users[0].id,
                 username: users[0].username,
+                user_tag: users[0].user_tag,
                 github_username: users[0].github_username,
                 gitlab_username: users[0].gitlab_username,
                 role: users[0].role || 'user',
@@ -818,7 +1306,7 @@ app.get("/users", async (req, res) => {
         const userId = decoded.id;
 
         const [users] = await db.query(
-            "SELECT id, username, github_username, avatar, skills FROM users WHERE id != ? ",
+            "SELECT id, username, user_tag, github_username, avatar, skills FROM users WHERE id != ? ",
             [userId]
         );
 
@@ -856,14 +1344,84 @@ app.get("/users", async (req, res) => {
 app.get("/profile/repositories", verifyToken, async (req, res) => {
     const userId = req.user.id;
     const provider = req.query.provider || 'github';
+    const forceRefresh = req.query.refresh === '1' || req.query.refresh === 'true';
     try {
-        const repos = await getCachedRepositories(userId, provider);
+        const [users] = await db.query(
+            'SELECT github_username, gitlab_username FROM users WHERE id = ?',
+            [userId]
+        );
+        if (users.length === 0) return res.status(404).json({ message: 'Пользователь не найден' });
+
+        const username = provider === 'gitlab'
+            ? (users[0].gitlab_username || users[0].github_username)
+            : users[0].github_username;
+        if (forceRefresh && provider === 'github') {
+            await clearGithubDetailsCache(userId);
+        }
+        const repos = await getRepositoriesForUser(userId, provider, username, {
+            forceRefresh,
+            failOnRefreshError: forceRefresh && provider === 'github',
+        });
         res.json({ repositories: repos });
     } catch (err) {
         console.error(err);
         res.status(500).json({ message: "Ошибка при получении репозиториев из БД" });
     }
 });
+
+app.get('/github/repos/:username/:repoName/branches', async (req, res) => {
+    const { username, repoName } = req.params;
+    const forceRefresh = req.query.refresh === '1' || req.query.refresh === 'true';
+
+    try {
+        const user = await getUserForGithubUsername(username);
+        if (!user) return res.status(404).json({ message: 'Пользователь с таким GitHub username не найден' });
+
+        const branches = await getGithubBranchesForRepo(user.id, username, repoName, { forceRefresh });
+        res.json(branches);
+    } catch (error) {
+        console.error('Ошибка при получении веток GitHub:', error.message);
+        res.status(500).json({ message: 'Не удалось получить ветки репозитория' });
+    }
+});
+
+app.get('/github/repos/:username/:repoName/commits', async (req, res) => {
+    const { username, repoName } = req.params;
+    const branch = String(req.query.sha || req.query.branch || 'main');
+    const forceRefresh = req.query.refresh === '1' || req.query.refresh === 'true';
+
+    try {
+        const user = await getUserForGithubUsername(username);
+        if (!user) return res.status(404).json({ message: 'Пользователь с таким GitHub username не найден' });
+
+        const commits = await getGithubCommitsForRepo(user.id, username, repoName, branch, { forceRefresh });
+        res.json(commits);
+    } catch (error) {
+        console.error('Ошибка при получении коммитов GitHub:', error.message);
+        res.status(500).json({ message: 'Не удалось получить коммиты репозитория' });
+    }
+});
+
+const handleGithubContentsRequest = async (req, res) => {
+    const { username, repoName } = req.params;
+    const filePath = req.params[0] || '';
+    const branch = String(req.query.ref || req.query.branch || 'main');
+    const forceRefresh = req.query.refresh === '1' || req.query.refresh === 'true';
+
+    try {
+        const user = await getUserForGithubUsername(username);
+        if (!user) return res.status(404).json({ message: 'Пользователь с таким GitHub username не найден' });
+
+        const files = await getGithubFilesForRepo(user.id, username, repoName, branch, filePath, { forceRefresh });
+        res.json(files);
+    } catch (error) {
+        console.error('Ошибка при получении файлов GitHub:', error.message);
+        res.status(500).json({ message: 'Не удалось получить файлы репозитория' });
+    }
+};
+
+app.get('/github/repos/:username/:repoName/contents', handleGithubContentsRequest);
+app.get('/github/repos/:username/:repoName/contents/*', handleGithubContentsRequest);
 
 
 // Маршрут для получения профиля текущего пользователя
@@ -872,7 +1430,7 @@ app.get('/profile', verifyToken, async (req, res) => {
 
     try {
         const [user] = await db.query(
-            'SELECT id, username, email, github_username, gitlab_username, avatar, skills FROM users WHERE id = ?',
+            'SELECT id, username, email, github_username, gitlab_username, user_tag, avatar, skills FROM users WHERE id = ?',
             [id]
         );
 
@@ -881,8 +1439,15 @@ app.get('/profile', verifyToken, async (req, res) => {
         }
 
         const profile = user[0];
-        const githubRepositories = await getRepositoriesForUser(profile.id, 'github', profile.github_username);
-        const gitlabRepositories = await getRepositoriesForUser(profile.id, 'gitlab', profile.gitlab_username || profile.github_username);
+        const forceRefresh = req.query.refresh === '1' || req.query.refresh === 'true';
+        if (forceRefresh) {
+            await clearGithubDetailsCache(profile.id);
+        }
+        const githubRepositories = await getRepositoriesForUser(profile.id, 'github', profile.github_username, {
+            forceRefresh,
+            failOnRefreshError: forceRefresh,
+        });
+        const gitlabRepositories = await getRepositoriesForUser(profile.id, 'gitlab', profile.gitlab_username || profile.github_username, { forceRefresh });
 
         res.status(200).json({
             user: profile,
@@ -900,9 +1465,14 @@ app.get('/profile', verifyToken, async (req, res) => {
 app.put('/profile/update', verifyToken, upload.single('avatar'), async (req, res) => {
     const { id } = req.user;
     const { username, github_username, gitlab_username, skills, email, currentPassword, newPassword } = req.body;
+    const userTag = normalizeUserTag(req.body.user_tag);
     const avatar = req.file ? `/uploads/${req.file.filename}` : null;
 
     try {
+        if (!isValidUserTag(userTag)) {
+            return res.status(400).json({ message: '@username должен быть от 3 до 32 символов: латиница, цифры и _' });
+        }
+
         if (newPassword) {
             if (!currentPassword) {
                 return res.status(400).json({ message: 'Укажите текущий пароль' });
@@ -940,6 +1510,15 @@ app.put('/profile/update', verifyToken, upload.single('avatar'), async (req, res
                 return res.status(400).json({ message: 'Этот GitLab username уже используется другим пользователем' });
             }
         }
+        if (req.body.user_tag !== undefined && userTag) {
+            const [existingUser] = await db.query(
+                'SELECT id FROM users WHERE user_tag = ? AND id != ?',
+                [userTag, id]
+            );
+            if (existingUser.length > 0) {
+                return res.status(400).json({ message: 'Этот @username уже занят другим пользователем' });
+            }
+        }
 
         const updateFields = [];
         const values = [];
@@ -947,6 +1526,7 @@ app.put('/profile/update', verifyToken, upload.single('avatar'), async (req, res
         if (username) updateFields.push('username = ?'), values.push(username);
         if (github_username !== undefined) updateFields.push('github_username = ?'), values.push(github_username.trim() === '' ? null : github_username);
         if (gitlab_username !== undefined) updateFields.push('gitlab_username = ?'), values.push(gitlab_username.trim() === '' ? null : gitlab_username);
+        if (req.body.user_tag !== undefined) updateFields.push('user_tag = ?'), values.push(userTag);
         if (skills) updateFields.push('skills = ?'), values.push(skills);
         if (email) updateFields.push('email = ?'), values.push(email);
         if (avatar) updateFields.push('avatar = ?'), values.push(avatar);
@@ -1025,7 +1605,7 @@ app.get('/users/:username', verifyToken, async (req, res) => {
     try {
         // Находим пользователя в базе данных
         const [user] = await db.query(
-            'SELECT id, username, email, github_username, gitlab_username, avatar, skills FROM users WHERE username = ?',
+            'SELECT id, username, email, github_username, gitlab_username, user_tag, avatar, skills FROM users WHERE username = ?',
             [decodedUsername]
         );
 
@@ -1034,8 +1614,9 @@ app.get('/users/:username', verifyToken, async (req, res) => {
         }
 
         const profile = user[0];
-        const githubRepositories = await getRepositoriesForUser(profile.id, 'github', profile.github_username);
-        const gitlabRepositories = await getRepositoriesForUser(profile.id, 'gitlab', profile.gitlab_username || profile.github_username);
+        const forceRefresh = req.query.refresh === '1' || req.query.refresh === 'true';
+        const githubRepositories = await getRepositoriesForUser(profile.id, 'github', profile.github_username, { forceRefresh });
+        const gitlabRepositories = await getRepositoriesForUser(profile.id, 'gitlab', profile.gitlab_username || profile.github_username, { forceRefresh });
 
         res.status(200).json({
             user: profile,
@@ -1281,7 +1862,7 @@ app.get('/chats/:chatId', verifyToken, async (req, res) => {
 
         const otherUserId = participants.find((id) => Number(id) !== Number(userId));
         const [users] = await db.query(
-            'SELECT id, username, avatar FROM users WHERE id = ?',
+            'SELECT id, username, user_tag, avatar FROM users WHERE id = ?',
             [otherUserId]
         );
 
@@ -1404,6 +1985,11 @@ app.post('/messages', verifyToken, async (req, res) => {
         const recipientIds = participants.filter((id) => Number(id) !== Number(userId));
 
         notifyClients({ type: 'NEW_MESSAGE', data: { ...newMessage[0], recipientIds } });
+        await notifyOfflineUsersByEmail(
+            recipientIds,
+            'Новое личное сообщение в IT-BIRD',
+            `${newMessage[0].username}: ${message || 'Вам отправили файл'}`
+        );
 
         res.status(200).json(newMessage[0]);  // Возвращаем добавленное сообщение
     } catch (error) {
@@ -1576,6 +2162,11 @@ app.post('/messages/upload', verifyToken, upload.single('media'), async (req, re
         };
 
         notifyClients({ type: 'NEW_MESSAGE', data: newMessage });
+        await notifyOfflineUsersByEmail(
+            recipientIds,
+            'Новый файл в личном чате IT-BIRD',
+            `${newMessage.username} отправил файл: ${file.originalname}`
+        );
 
         res.status(201).json(newMessage);
     } catch (error) {
@@ -1722,7 +2313,7 @@ app.get('/group-chats/:chatId/members', verifyToken, async (req, res) => {
         }
 
         const [members] = await db.query(
-            `SELECT u.id, u.username, u.avatar, gcm.role, gcm.joined_at
+            `SELECT u.id, u.username, u.user_tag, u.avatar, gcm.role, gcm.joined_at
             FROM group_chat_members gcm
             JOIN users u ON gcm.user_id = u.id
             WHERE gcm.group_chat_id = ?`,
@@ -1967,12 +2558,29 @@ app.post('/group-chats/:chatId/messages', verifyToken, async (req, res) => {
             [chatId, userId]
         );
         const recipientIds = members.map((member) => member.user_id);
+        const mentionRecipientIds = await resolveGroupMentionRecipients(chatId, message, userId);
 
         // Отправляем уведомление другим участникам
         notifyClients({
             type: 'NEW_GROUP_MESSAGE',
-            data: { ...newMessage[0], recipientIds }
+            data: { ...newMessage[0], recipientIds, mentionRecipientIds }
         });
+
+        if (mentionRecipientIds.length > 0) {
+            notifyClients({
+                type: 'GROUP_MENTION',
+                data: {
+                    ...newMessage[0],
+                    recipientIds: mentionRecipientIds,
+                    mentionEveryone: /@everyone\b/i.test(message),
+                }
+            });
+            await notifyOfflineUsersByEmail(
+                mentionRecipientIds,
+                /@everyone\b/i.test(message) ? 'Вас упомянули через @everyone в IT-BIRD' : 'Вас упомянули в IT-BIRD',
+                `${newMessage[0].username} упомянул вас в групповом чате: ${message}`
+            );
+        }
 
         res.status(201).json(newMessage[0]);
     } catch (error) {
@@ -2150,6 +2758,7 @@ app.post('/group-chats/:chatId/upload', verifyToken, upload.single('media'), asy
     const { chatId } = req.params;
     const userId = req.user.id;
     const file = req.file;
+    const messageText = (req.body.message || '').trim();
 
     if (!file) {
         return res.status(400).json({ message: "Файл не прикреплён" });
@@ -2175,7 +2784,7 @@ app.post('/group-chats/:chatId/upload', verifyToken, upload.single('media'), asy
             `INSERT INTO group_chat_messages 
             (group_chat_id, user_id, message, media, file_name, file_size) 
             VALUES (?, ?, ?, ?, ?, ?)`,
-            [chatId, userId, '', mediaUrl, file.originalname, file.size]
+            [chatId, userId, messageText, mediaUrl, file.originalname, file.size]
         );
 
         const [userRows] = await db.query('SELECT username FROM users WHERE id = ?', [userId]);
@@ -2190,7 +2799,7 @@ app.post('/group-chats/:chatId/upload', verifyToken, upload.single('media'), asy
             id: result.insertId,
             group_chat_id: parseInt(chatId),
             user_id: userId,
-            message: '',
+            message: messageText,
             username: userRows[0].username,
             media: mediaUrl,
             file_name: file.originalname,
@@ -2198,6 +2807,7 @@ app.post('/group-chats/:chatId/upload', verifyToken, upload.single('media'), asy
             file_size: file.size,
             created_at: new Date(),
             recipientIds,
+            mentionRecipientIds,
         };
 
         // Отправляем уведомление другим участникам
@@ -2205,6 +2815,22 @@ app.post('/group-chats/:chatId/upload', verifyToken, upload.single('media'), asy
             type: 'NEW_GROUP_MESSAGE',
             data: newMessage
         });
+
+        if (mentionRecipientIds.length > 0) {
+            notifyClients({
+                type: 'GROUP_MENTION',
+                data: {
+                    ...newMessage,
+                    recipientIds: mentionRecipientIds,
+                    mentionEveryone: /@everyone\b/i.test(messageText),
+                }
+            });
+            await notifyOfflineUsersByEmail(
+                mentionRecipientIds,
+                /@everyone\b/i.test(messageText) ? 'Вас упомянули через @everyone в IT-BIRD' : 'Вас упомянули в IT-BIRD',
+                `${newMessage.username} упомянул вас в групповом чате: ${messageText || file.originalname}`
+            );
+        }
 
         res.status(201).json(newMessage);
     } catch (error) {
@@ -2766,7 +3392,8 @@ app.get('/repositories/:github_username', verifyToken, async (req, res) => {
             return res.status(404).json({ message: 'Пользователь с таким GitHub username не найден' });
         }
 
-        const repositories = await getRepositoriesForUser(users[0].id, 'github', github_username);
+        const forceRefresh = req.query.refresh === '1' || req.query.refresh === 'true';
+        const repositories = await getRepositoriesForUser(users[0].id, 'github', github_username, { forceRefresh });
 
         res.status(200).json(repositories);
 
@@ -3122,7 +3749,7 @@ app.post("/forums/:id/answers", verifyToken, async (req, res) => {
     }
 
     try {
-        const [forumRows] = await db.query("SELECT status FROM forums WHERE id = ?", [id]);
+        const [forumRows] = await db.query("SELECT id, question, user_id, status FROM forums WHERE id = ?", [id]);
         if (forumRows.length === 0) {
             return res.status(404).json({ message: "Вопрос не найден" });
         }
@@ -3135,13 +3762,33 @@ app.post("/forums/:id/answers", verifyToken, async (req, res) => {
             [id, userId, answer, new Date()]
         );
 
+        const [authorRows] = await db.query('SELECT username FROM users WHERE id = ?', [userId]);
+        const forum = forumRows[0];
+        const ownerId = Number(forum.user_id);
+        const recipientIds = ownerId !== Number(userId) ? [ownerId] : [];
+
         const newAnswer = {
             id: result.insertId,
-            forum_id: id,
+            forum_id: Number(id),
             user_id: userId,
+            user: authorRows[0]?.username || 'Пользователь',
             answer,
             created_at: new Date(),
+            forumTitle: forum.question,
+            recipientIds,
         };
+
+        if (recipientIds.length > 0) {
+            notifyClients({
+                type: 'NEW_FORUM_ANSWER',
+                data: newAnswer,
+            });
+            await notifyOfflineUsersByEmail(
+                recipientIds,
+                'Новый ответ на ваш вопрос в IT-BIRD',
+                `Форум\nВам пришёл ответ на ваш вопрос\nВопрос: ${forum.question}\n\n${newAnswer.user}: ${answer}`
+            );
+        }
 
         res.status(201).json(newAnswer);
     } catch (error) {

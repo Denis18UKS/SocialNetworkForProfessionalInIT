@@ -352,7 +352,7 @@ const RepositoryItem = ({ repo, user, provider, onDownload, downloadLoading }: {
     const fetchBranches = async (repoName: string) => {
         try {
             const response = await fetch(
-                `https://api.github.com/repos/${user.github_username}/${repoName}/branches`
+                `http://localhost:5000/github/repos/${user.github_username}/${repoName}/branches`
             );
             const data = await response.json();
             const branchNames = Array.isArray(data) ? data.map(branch => branch.name) : [];
@@ -360,12 +360,14 @@ const RepositoryItem = ({ repo, user, provider, onDownload, downloadLoading }: {
             if (branchNames.length > 0 && !branchNames.includes(selectedBranch)) {
                 setSelectedBranch(branchNames[0]);
             }
+            return branchNames;
         } catch (error) {
             toast({
                 title: "Ошибка",
                 description: "Не удалось загрузить ветки",
                 variant: "destructive",
             });
+            return [];
         }
     };
 
@@ -373,7 +375,7 @@ const RepositoryItem = ({ repo, user, provider, onDownload, downloadLoading }: {
         setActiveSection("commits");
         try {
             const response = await fetch(
-                `https://api.github.com/repos/${user.github_username}/${repoName}/commits?sha=${branch}`
+                `http://localhost:5000/github/repos/${user.github_username}/${repoName}/commits?sha=${branch}`
             );
             const data = await response.json();
             setCommits(Array.isArray(data) ? data : []);
@@ -389,8 +391,10 @@ const RepositoryItem = ({ repo, user, provider, onDownload, downloadLoading }: {
     const fetchFiles = async (repoName: string, path: string = "", branch: string = selectedBranch) => {
         setActiveSection("files");
         try {
+            const encodedPath = path.split("/").filter(Boolean).map(encodeURIComponent).join("/");
+            const pathSuffix = encodedPath ? `/${encodedPath}` : "";
             const response = await fetch(
-                `https://api.github.com/repos/${user.github_username}/${repoName}/contents/${path}?ref=${branch}`
+                `http://localhost:5000/github/repos/${user.github_username}/${repoName}/contents${pathSuffix}?ref=${branch}`
             );
             const data = await response.json();
             setFiles(Array.isArray(data) ? data : []);
@@ -482,12 +486,13 @@ const RepositoryItem = ({ repo, user, provider, onDownload, downloadLoading }: {
                                 size="sm"
                                 variant={activeSection === "commits" ? "default" : "outline"}
                                 className="border-[#6E59A5] text-[#6E59A5] hover:bg-[#6E59A5]/10"
-                                onClick={() => {
+                                onClick={async () => {
                                     if (activeSection === "commits") {
                                         setActiveSection(null);
                                     } else {
-                                        if (branches.length === 0) fetchBranches(repo.name);
-                                        fetchCommits(repo.name);
+                                        const branchNames = branches.length === 0 ? await fetchBranches(repo.name) : branches;
+                                        const branch = branchNames.includes(selectedBranch) ? selectedBranch : (branchNames[0] || selectedBranch);
+                                        fetchCommits(repo.name, branch);
                                     }
                                 }}
                             >
@@ -497,12 +502,13 @@ const RepositoryItem = ({ repo, user, provider, onDownload, downloadLoading }: {
                                 size="sm"
                                 variant={activeSection === "files" ? "default" : "outline"}
                                 className="border-[#6E59A5] text-[#6E59A5] hover:bg-[#6E59A5]/10"
-                                onClick={() => {
+                                onClick={async () => {
                                     if (activeSection === "files") {
                                         setActiveSection(null);
                                     } else {
-                                        if (branches.length === 0) fetchBranches(repo.name);
-                                        fetchFiles(repo.name);
+                                        const branchNames = branches.length === 0 ? await fetchBranches(repo.name) : branches;
+                                        const branch = branchNames.includes(selectedBranch) ? selectedBranch : (branchNames[0] || selectedBranch);
+                                        fetchFiles(repo.name, "", branch);
                                     }
                                 }}
                             >

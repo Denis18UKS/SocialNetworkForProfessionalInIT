@@ -10,6 +10,7 @@ import { MessageSquare, Send, ChevronLeft, Reply, Trash2 } from "lucide-react";
 import { motion } from "framer-motion";
 import { Badge } from "@/components/ui/badge";
 import { useI18n } from "@/lib/i18n";
+import CodeSnippet, { extractCodeBlocks, textWithoutCodeBlocks } from "@/components/CodeSnippet";
 
 interface Answer {
     id: number;
@@ -44,6 +45,25 @@ const Answers = () => {
     const userId = localStorage.getItem('userId');
     const username = localStorage.getItem('username') || 'You';
     const isQuestionSolved = question?.status === "\u0440\u0435\u0448\u0451\u043d";
+
+    const renderTextWithCode = (text = "", source = "forum-answer") => {
+        const codeBlocks = extractCodeBlocks(text);
+        const plainText = textWithoutCodeBlocks(text);
+
+        return (
+            <div className="space-y-4">
+                {plainText && <p className="whitespace-pre-wrap">{plainText}</p>}
+                {codeBlocks.map((block) => (
+                    <CodeSnippet
+                        key={`${source}-${block.index}`}
+                        code={block.code}
+                        language={block.language}
+                        source={`${source}-${block.index}`}
+                    />
+                ))}
+            </div>
+        );
+    };
 
     const fetchAnswers = async () => {
         try {
@@ -260,9 +280,9 @@ const Answers = () => {
                                         </div>
                                     </CardHeader>
                                     <CardContent>
-                                        <p className="whitespace-pre-line text-gray-800 dark:text-gray-200 mb-4">
-                                            {answer.answer}
-                                        </p>
+                                        <div className="mb-4 text-gray-800 dark:text-gray-200">
+                                            {renderTextWithCode(answer.answer, `forum-answer-${answer.id}`)}
+                                        </div>
 
                                         {/* Комментарии к ответу */}
                                         {answer.comments && answer.comments.length > 0 && (
@@ -287,9 +307,9 @@ const Answers = () => {
                                                                             {formatDateTime(comment.created_at)}
                                                                         </span>
                                                                     </div>
-                                                                    <p className="text-sm text-gray-700 dark:text-gray-300 mt-1">
-                                                                        {comment.comment}
-                                                                    </p>
+                                                                    <div className="mt-1 text-sm text-gray-700 dark:text-gray-300">
+                                                                        {renderTextWithCode(comment.comment, `forum-comment-${comment.id}`)}
+                                                                    </div>
                                                                 </div>
                                                             </div>
                                                         </div>

@@ -19,16 +19,6 @@ router.get('/repos/:username', async (req, res) => {
 });
 
 // Получение коммитов
-router.get('/repos/:username/:repoName/commits', async (req, res) => {
-    const { username, repoName } = req.params;
-    try {
-        const response = await axios.get(`${GITHUB_API_BASE}/repos/${username}/${repoName}/commits`);
-        res.json(response.data);
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-});
-
 // Скачать архив репозитория
 router.get('/repos/:username/:repoName/download', async (req, res) => {
     const { username, repoName } = req.params;

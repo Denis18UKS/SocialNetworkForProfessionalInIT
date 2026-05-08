@@ -11,6 +11,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { MessageSquare, Plus, Check, ChevronLeft } from "lucide-react";
 import { useAuth } from "@/pages/AuthContext";
 import { motion } from "framer-motion";
+import CodeSnippet, { extractCodeBlocks, textWithoutCodeBlocks } from "@/components/CodeSnippet";
 
 interface Question {
     id: number;
@@ -51,6 +52,25 @@ const Forum = () => {
     };
 
     const currentUser = getUserFromToken();
+    const renderTextWithCode = (text = "", source = "forum") => {
+        const codeBlocks = extractCodeBlocks(text);
+        const plainText = textWithoutCodeBlocks(text);
+
+        return (
+            <div className="space-y-4">
+                {plainText && <p className="whitespace-pre-wrap">{plainText}</p>}
+                {codeBlocks.map((block) => (
+                    <CodeSnippet
+                        key={`${source}-${block.index}`}
+                        code={block.code}
+                        language={block.language}
+                        source={`${source}-${block.index}`}
+                    />
+                ))}
+            </div>
+        );
+    };
+
     const canResolveQuestion = (question: Question) =>
         question.status !== 'решён' &&
         isAuthenticated &&
@@ -233,9 +253,9 @@ const Forum = () => {
                                     </div>
                                 </CardHeader>
                                 <CardContent className="flex-grow">
-                                    <p className="text-gray-600 dark:text-gray-300 mb-4 line-clamp-3">
-                                        {q.description}
-                                    </p>
+                                    <div className="mb-4 line-clamp-3 text-gray-600 dark:text-gray-300">
+                                        {textWithoutCodeBlocks(q.description) || q.description}
+                                    </div>
                                     <div className="text-sm text-gray-500 dark:text-gray-400">
                                         <p>Автор: {q.user || 'Аноним'}</p>
                                         <p>Дата: {new Date(q.created_at).toLocaleDateString()}</p>
@@ -294,9 +314,7 @@ const Forum = () => {
                             </div>
                         </DialogHeader>
                         <div className="prose dark:prose-invert max-w-none">
-                            <pre className="whitespace-pre-wrap font-sans">
-                                {selectedQuestion?.description}
-                            </pre>
+                            {renderTextWithCode(selectedQuestion?.description || "", `forum-question-${selectedQuestion?.id}`)}
                         </div>
                         <div className="flex gap-2 mt-4">
                             <Button

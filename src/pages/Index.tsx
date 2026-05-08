@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Code2, Download, FileText, Play } from "lucide-react";
+import { Download, FileText } from "lucide-react";
 import { format, formatDistance } from "date-fns";
 import { ru } from "date-fns/locale";
 import { motion } from "framer-motion";
@@ -13,8 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/use-toast";
 import { LiquidButton } from "@/components/ui/liquid-button";
-
-type CodeLanguage = "java" | "csharp" | "cpp" | "lua" | "python" | "php" | "javascript" | "nodejs" | "react";
+import CodeSnippet, { CodeLanguage } from "@/components/CodeSnippet";
 
 interface Post {
   id: number;
@@ -150,18 +149,6 @@ const Index = () => {
     }
   };
 
-  const openInCompiler = (post: Post) => {
-    const language = codeLanguages.some((item) => item.value === post.code_language)
-      ? post.code_language
-      : "javascript";
-    navigate("/compiler", {
-      state: {
-        language,
-        code: post.code_content || "",
-      },
-    });
-  };
-
   const renderEmptyState = (type: "news" | "posts") => (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="col-span-full py-12 text-center">
       <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-gray-100 dark:bg-gray-800">
@@ -213,21 +200,12 @@ const Index = () => {
                 <CardDescription className="whitespace-pre-wrap text-gray-600 dark:text-gray-300">{item.description}</CardDescription>
 
                 {item.code_content && (
-                  <div className="mt-4 overflow-hidden rounded-md border bg-gray-950">
-                    <div className="flex items-center justify-between border-b border-gray-800 px-3 py-2 text-xs text-gray-300">
-                      <span className="flex items-center gap-2">
-                        <Code2 className="h-4 w-4" />
-                        {codeLanguage || "Код"}
-                      </span>
-                      <Button size="sm" variant="secondary" className="h-8 gap-2" onClick={() => openInCompiler(item)}>
-                        <Play className="h-4 w-4" />
-                        Запустить
-                      </Button>
-                    </div>
-                    <pre className="max-h-64 overflow-auto whitespace-pre p-3 font-mono text-sm leading-6 text-gray-100">
-                      <code>{item.code_content}</code>
-                    </pre>
-                  </div>
+                  <CodeSnippet
+                    code={item.code_content}
+                    language={codeLanguage || item.code_language || "javascript"}
+                    source={`post-${item.id}`}
+                    className="mt-4"
+                  />
                 )}
 
                 {attachmentUrl && (

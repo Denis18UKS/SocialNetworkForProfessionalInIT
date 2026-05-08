@@ -44,6 +44,7 @@ import EmojiPicker, { EmojiClickData } from 'emoji-picker-react';
 interface User {
     id: number;
     username: string;
+    user_tag?: string | null;
     avatar: string;
     isOnline?: boolean;
 }
@@ -548,6 +549,7 @@ const GroupChats = () => {
 
             if (notification.type === 'NEW_GROUP_MESSAGE') {
                 const message = notification.data;
+                if (message.mentionRecipientIds?.includes(currentUser?.id)) return;
                 if (message.user_id !== currentUser?.id) {
                     if (message.group_chat_id !== Number(chatId)) {
                         toast(`Новое сообщение в чате ${message.group_chat_name || 'Групповой чат'}`);
@@ -1228,6 +1230,19 @@ const GroupChats = () => {
                                         )}
                                     </div>
 
+                                    <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            size="sm"
+                                            className="h-7 px-2 text-xs"
+                                            onClick={() => setNewMessage((current) => `${current}${current && !current.endsWith(" ") ? " " : ""}@everyone `)}
+                                        >
+                                            @everyone
+                                        </Button>
+                                        <span>или упомяните участника через его @username</span>
+                                    </div>
+
                                     <div className="flex items-end gap-2">
                                         <label className="cursor-pointer p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700">
                                             <Paperclip className="w-5 h-5 text-gray-500" />
@@ -1438,6 +1453,9 @@ const GroupChats = () => {
                                         </div>
                                         <div className="flex-1">
                                             <p className="font-medium">{member.username}</p>
+                                            {member.user_tag && (
+                                                <p className="text-xs text-primary">@{member.user_tag}</p>
+                                            )}
                                             <p className="text-xs text-gray-500 dark:text-gray-400">
                                                 {member.id === selectedChat.creator_id ? "Создатель · " : ""}
                                                 {onlineUserIds.includes(member.id) ? "Онлайн" : "Оффлайн"}
