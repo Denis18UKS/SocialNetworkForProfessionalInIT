@@ -2,6 +2,9 @@ import { createRoot } from 'react-dom/client'
 import App from './App.tsx'
 import './index.css'
 import { readSettings } from './lib/settings.ts'
+import { installNetworkUrlRewrite } from './lib/network.ts'
+
+installNetworkUrlRewrite();
 
 const settings = readSettings();
 const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;

@@ -46,6 +46,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { getWsUrl, readSettings } from "@/lib/settings";
 import { readOnlineUserIds, subscribeOnlineUserIds, writeOnlineUserIds } from "@/lib/realtime";
 import VoiceCallControls from "@/components/VoiceCallControls";
+import VoiceMessageBubble from "@/components/VoiceMessageBubble";
 
 import { Smile, Mic } from 'lucide-react';
 import EmojiPicker, { EmojiClickData } from 'emoji-picker-react';
@@ -93,6 +94,33 @@ interface DecodedToken {
     username: string;
 }
 
+type SpeechRecognitionLike = {
+    lang: string;
+    continuous: boolean;
+    interimResults: boolean;
+    start: () => void;
+    stop: () => void;
+    abort: () => void;
+    onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+    onerror: ((event: Event) => void) | null;
+};
+
+type SpeechRecognitionEventLike = {
+    resultIndex: number;
+    results: ArrayLike<{
+        isFinal: boolean;
+        0: { transcript: string };
+    }>;
+};
+
+const getSpeechRecognition = () => {
+    const speechWindow = window as typeof window & {
+        SpeechRecognition?: new () => SpeechRecognitionLike;
+        webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+    };
+    return speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition;
+};
+
 const GroupChats = () => {
     const { chatId } = useParams<{ chatId: string }>();
     const [selectedChat, setSelectedChat] = useState<GroupChat | null>(null);
@@ -123,6 +151,10 @@ const GroupChats = () => {
     const [isRecording, setIsRecording] = useState(false);
     const mediaRecorder = useRef<MediaRecorder | null>(null);
     const audioChunks = useRef<Blob[]>([]);
+    const recordingCancelledRef = useRef(false);
+    const sendVoiceMessageRef = useRef<(file: File) => void>(() => undefined);
+    const speechRecognitionRef = useRef<SpeechRecognitionLike | null>(null);
+    const voiceTranscriptRef = useRef("");
     const [recordingTime, setRecordingTime] = useState(0);
     const [showCancelRecording, setShowCancelRecording] = useState(false);
     const timerRef = useRef<NodeJS.Timeout | null>(null);
@@ -130,6 +162,9 @@ const GroupChats = () => {
     const [showDeleteOptions, setShowDeleteOptions] = useState(false);
     const [messageToDelete, setMessageToDelete] = useState<GroupMessage | null>(null);
     const [translatedMessages, setTranslatedMessages] = useState<Record<number, string>>({});
+    const [messageTranscriptions, setMessageTranscriptions] = useState<Record<number, string>>({});
+    const [translationSettingsVersion, setTranslationSettingsVersion] = useState(0);
+    const [revealedVoiceTextIds, setRevealedVoiceTextIds] = useState<Record<number, boolean>>({});
     const [onlineUserIds, setOnlineUserIds] = useState<number[]>(readOnlineUserIds);
     const [highlightedMessageId, setHighlightedMessageId] = useState<number | null>(null);
 
@@ -183,6 +218,13 @@ const GroupChats = () => {
         return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
     };
 
+    const isVoiceMessage = (message: GroupMessage) => {
+        const mediaPath = message.media || message.file_path || "";
+        const fileName = (message.file_name || "").toLowerCase();
+        const isAudio = /\.(wav|webm|ogg|mp3)$/i.test(mediaPath) || /\.(wav|webm|ogg|mp3)$/i.test(fileName);
+        return isAudio && (fileName.includes("voice") || fileName.includes("голос") || fileName === "voice-message.wav");
+    };
+
     const handleEmojiClick = (emojiData: EmojiClickData) => {
         setNewMessage(prev => prev + emojiData.emoji);
         setShowEmojiPicker(false);
@@ -191,8 +233,29 @@ const GroupChats = () => {
     const startRecording = async () => {
         try {
             setRecordingTime(0);
+            recordingCancelledRef.current = false;
+            voiceTranscriptRef.current = "";
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             mediaRecorder.current = new MediaRecorder(stream);
+            const settings = readSettings();
+            const SpeechRecognition = getSpeechRecognition();
+
+            if (SpeechRecognition) {
+                const recognition = new SpeechRecognition();
+                recognition.lang = settings.appLanguage === "en" ? "en-US" : "ru-RU";
+                recognition.continuous = true;
+                recognition.interimResults = true;
+                recognition.onresult = (event) => {
+                    let transcript = "";
+                    for (let index = 0; index < event.results.length; index += 1) {
+                        transcript += event.results[index][0]?.transcript || "";
+                    }
+                    voiceTranscriptRef.current = transcript.trim();
+                };
+                recognition.onerror = () => undefined;
+                speechRecognitionRef.current = recognition;
+                recognition.start();
+            }
 
             mediaRecorder.current.ondataavailable = (e) => {
                 if (e.data.size > 0) {
@@ -207,10 +270,13 @@ const GroupChats = () => {
                     lastModified: Date.now()
                 });
 
-                setMediaFile(audioFile);
+                if (!recordingCancelledRef.current && audioBlob.size > 0) {
+                    sendVoiceMessageRef.current(audioFile);
+                }
                 audioChunks.current = [];
                 stream.getTracks().forEach(track => track.stop());
                 setRecordingTime(0);
+                recordingCancelledRef.current = false;
             };
 
             mediaRecorder.current.start();
@@ -228,7 +294,10 @@ const GroupChats = () => {
 
     const stopRecording = () => {
         if (mediaRecorder.current?.state === 'recording') {
+            recordingCancelledRef.current = false;
             mediaRecorder.current.stop();
+            speechRecognitionRef.current?.stop();
+            speechRecognitionRef.current = null;
             setIsRecording(false);
             setShowCancelRecording(false);
             if (timerRef.current) clearInterval(timerRef.current);
@@ -237,7 +306,10 @@ const GroupChats = () => {
 
     const cancelRecording = () => {
         if (mediaRecorder.current?.state === 'recording') {
+            recordingCancelledRef.current = true;
             mediaRecorder.current.stop();
+            speechRecognitionRef.current?.abort();
+            speechRecognitionRef.current = null;
             audioChunks.current = [];
             setIsRecording(false);
             setShowCancelRecording(false);
@@ -250,9 +322,13 @@ const GroupChats = () => {
         const fetchGroupChats = async () => {
             const token = localStorage.getItem("token");
             if (!token) {
+                setIsLoading(false);
                 navigate('/login');
                 return;
             }
+
+            const controller = new AbortController();
+            const timeoutId = window.setTimeout(() => controller.abort(), 10000);
 
             try {
                 const decodedToken = jwtDecode<DecodedToken>(token);
@@ -261,15 +337,23 @@ const GroupChats = () => {
                 const response = await fetch('http://localhost:5000/group-chats', {
                     method: 'GET',
                     headers: { 'Authorization': `Bearer ${token}` },
+                    signal: controller.signal,
                 });
+                if (!response.ok) throw new Error("Не удалось загрузить групповые чаты");
 
                 const chats = await response.json();
-                setGroupChats(chats);
-                setFilteredChats(chats);
+                const safeChats = Array.isArray(chats) ? chats : [];
+                setGroupChats(safeChats);
+                setFilteredChats(safeChats);
             } catch (error) {
                 console.error("Ошибка загрузки групповых чатов:", error);
-                navigate('/login');
+                if (error instanceof DOMException && error.name === "AbortError") {
+                    toast.error("Сервер не ответил. Проверьте, запущен ли backend.");
+                } else {
+                    navigate('/login');
+                }
             } finally {
+                window.clearTimeout(timeoutId);
                 setIsLoading(false);
             }
         };
@@ -295,7 +379,7 @@ const GroupChats = () => {
                     headers: { 'Authorization': `Bearer ${token}` },
                 });
                 const data = await response.json();
-                setFriends(data);
+                setFriends(Array.isArray(data) ? data : []);
             } catch (error) {
                 console.error("Ошибка загрузки друзей:", error);
             }
@@ -504,7 +588,7 @@ const GroupChats = () => {
                     headers: { 'Authorization': `Bearer ${token}` },
                 });
                 const messagesData = await response.json();
-                setMessages(messagesData);
+                setMessages(Array.isArray(messagesData) ? messagesData : []);
                 setUnreadMessagesCount(prev => ({ ...prev, [Number(chatId)]: 0 }));
 
                 setTimeout(scrollToBottom, 100);
@@ -524,7 +608,7 @@ const GroupChats = () => {
                 headers: { 'Authorization': `Bearer ${token}` },
             });
             const members = await response.json();
-            setChatMembers(members);
+            setChatMembers(Array.isArray(members) ? members : []);
         } catch (error) {
             console.error("Ошибка загрузки участников:", error);
         }
@@ -628,9 +712,25 @@ const GroupChats = () => {
     }, [chatId, currentUser?.id, fetchChatMembers]);
 
     useEffect(() => {
+        const handleSettingsChange = () => {
+            setTranslatedMessages({});
+            setMessageTranscriptions({});
+            setTranslationSettingsVersion((version) => version + 1);
+        };
+
+        window.addEventListener("itbird-settings-change", handleSettingsChange);
+        window.addEventListener("storage", handleSettingsChange);
+        return () => {
+            window.removeEventListener("itbird-settings-change", handleSettingsChange);
+            window.removeEventListener("storage", handleSettingsChange);
+        };
+    }, []);
+
+    useEffect(() => {
         const settings = readSettings();
         if (!settings.autoTranslate) {
             setTranslatedMessages({});
+            setMessageTranscriptions({});
             return;
         }
 
@@ -647,16 +747,23 @@ const GroupChats = () => {
                             "Content-Type": "application/json",
                             Authorization: `Bearer ${token}`,
                         },
-                        body: JSON.stringify({ text: msg.message, target: settings.translateLanguage }),
+                        body: JSON.stringify({
+                            text: msg.message,
+                            target: settings.translateLanguage,
+                            transcription: settings.transcriptionEnabled,
+                        }),
                     });
                     if (!response.ok) return;
                     const data = await response.json();
                     setTranslatedMessages((current) => ({ ...current, [msg.id]: data.translated }));
+                    if (data.transcription) {
+                        setMessageTranscriptions((current) => ({ ...current, [msg.id]: data.transcription }));
+                    }
                 } catch (error) {
                     console.error("Translation error:", error);
                 }
             });
-    }, [messages, translatedMessages]);
+    }, [messages, translatedMessages, translationSettingsVersion]);
 
     const selectChat = (chat: GroupChat) => {
         if (selectedChat?.id === chat.id) return;
@@ -666,6 +773,12 @@ const GroupChats = () => {
         setUnreadMessagesCount(prev => ({ ...prev, [chat.id]: 0 }));
         navigate(`/group-chats/${chat.id}`);
     };
+
+    useEffect(() => {
+        if (!chatId || selectedChat) return;
+        const currentChat = groupChats.find((chat) => chat.id === Number(chatId));
+        if (currentChat) setSelectedChat(currentChat);
+    }, [chatId, groupChats, selectedChat]);
 
     const createGroupChat = async () => {
         if (!chatName.trim() || selectedFriends.length === 0) {
@@ -693,6 +806,8 @@ const GroupChats = () => {
             const newChat = await response.json();
             setGroupChats(prev => [...prev, newChat]);
             setSelectedChat(newChat);
+            setMessages([]);
+            navigate(`/group-chats/${newChat.id}`);
             setShowCreateModal(false);
             setChatName('');
             setChatDescription('');
@@ -714,8 +829,49 @@ const GroupChats = () => {
         }
     };
 
+    const sendMediaMessage = async (file: File, messageText = newMessage.trim()) => {
+        const token = localStorage.getItem("token");
+        if (!token || !selectedChat) {
+            toast.error('Чат не выбран или нет токена');
+            return;
+        }
+
+        try {
+            const formData = new FormData();
+            formData.append('media', file);
+            formData.append('message', messageText);
+
+            const response = await fetch(`http://localhost:5000/group-chats/${selectedChat.id}/upload`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                },
+                body: formData
+            });
+
+            if (!response.ok) throw new Error('Ошибка при отправке сообщения');
+            const sentMessage = await response.json();
+            setMessages(prev => [...prev, sentMessage]);
+            setNewMessage('');
+            setMediaFile(null);
+            setTimeout(scrollToBottom, 100);
+        } catch (error) {
+            console.error('Ошибка:', error);
+            toast.error('Ошибка при отправке сообщения');
+        }
+    };
+
+    sendVoiceMessageRef.current = (file: File) => {
+        void sendMediaMessage(file, voiceTranscriptRef.current);
+    };
+
     const sendMessage = async () => {
         if (newMessage.trim() === '' && !mediaFile) return;
+
+        if (mediaFile) {
+            await sendMediaMessage(mediaFile);
+            return;
+        }
 
         const token = localStorage.getItem("token");
         if (!token || !selectedChat) {
@@ -724,40 +880,19 @@ const GroupChats = () => {
         }
 
         try {
-            if (mediaFile) {
-                const formData = new FormData();
-                formData.append('media', mediaFile);
-                formData.append('message', newMessage.trim());
-
-                const response = await fetch(`http://localhost:5000/group-chats/${selectedChat.id}/upload`, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${token}`,
-                    },
-                    body: formData
-                });
-
-                if (!response.ok) throw new Error('Ошибка при отправке сообщения');
-                const sentMessage = await response.json();
-                setMessages(prev => [...prev, sentMessage]);
-                setNewMessage('');
-                setMediaFile(null);
-                setTimeout(scrollToBottom, 100);
-            } else {
-                const response = await fetch(`http://localhost:5000/group-chats/${selectedChat.id}/messages`, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${token}`,
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ message: newMessage.trim() })
-                });
-                if (!response.ok) throw new Error('Ошибка при отправке сообщения');
-                const sentMessage = await response.json();
-                setMessages(prev => [...prev, sentMessage]);
-                setNewMessage('');
-                setTimeout(scrollToBottom, 100);
-            }
+            const response = await fetch(`http://localhost:5000/group-chats/${selectedChat.id}/messages`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ message: newMessage.trim() })
+            });
+            if (!response.ok) throw new Error('Ошибка при отправке сообщения');
+            const sentMessage = await response.json();
+            setMessages(prev => [...prev, sentMessage]);
+            setNewMessage('');
+            setTimeout(scrollToBottom, 100);
         } catch (error) {
             console.error('Ошибка:', error);
             toast.error('Ошибка при отправке сообщения');
@@ -818,10 +953,20 @@ const GroupChats = () => {
         return `${(size / 1073741824).toFixed(1)} GB`;
     };
 
-    if (!currentUser || isLoading) {
+    if (isLoading) {
         return (
             <div className="min-h-screen flex items-center justify-center">
                 <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#6E59A5]"></div>
+            </div>
+        );
+    }
+
+    if (!currentUser) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4 text-center dark:bg-gray-900">
+                <div className="rounded-lg border bg-white p-6 text-gray-700 shadow-sm dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200">
+                    Не удалось определить пользователя. Войдите в аккаунт заново.
+                </div>
             </div>
         );
     }
@@ -1025,9 +1170,12 @@ const GroupChats = () => {
                                                 )}
 
                                                 <>
-                                                    {msg.message && (
+                                                    {msg.message && (!isVoiceMessage(msg) || revealedVoiceTextIds[msg.id]) && (
                                                         <div className="space-y-1 text-sm">
                                                             <div>{translatedMessages[msg.id] || msg.message}</div>
+                                                            {messageTranscriptions[msg.id] && (
+                                                                <div className="text-xs opacity-80">Как читать: {messageTranscriptions[msg.id]}</div>
+                                                            )}
                                                             {translatedMessages[msg.id] && translatedMessages[msg.id] !== msg.message && (
                                                                 <div className="text-xs opacity-70">{msg.message}</div>
                                                             )}
@@ -1108,11 +1256,23 @@ const GroupChats = () => {
                                                             }
 
                                                             if (['mp3', 'wav', 'ogg'].includes(ext)) {
+                                                                const voiceMessage = isVoiceMessage(msg);
                                                                 return (
-                                                                    <div className="mt-2 w-[280px] max-w-[70vw] overflow-hidden">
-                                                                        <audio controls className="block w-full min-w-0">
-                                                                            <source src={mediaUrl} type={`audio/${ext}`} />
-                                                                        </audio>
+                                                                    <div className={voiceMessage ? "mt-2 min-w-0" : "mt-2 w-[280px] max-w-[70vw] overflow-hidden"}>
+                                                                        {voiceMessage && (
+                                                                            <VoiceMessageBubble
+                                                                                src={mediaUrl}
+                                                                                transcript={msg.message}
+                                                                                revealed={Boolean(revealedVoiceTextIds[msg.id])}
+                                                                                onToggleTranscript={() => setRevealedVoiceTextIds((current) => ({ ...current, [msg.id]: !current[msg.id] }))}
+                                                                                onMissingTranscript={() => toast.info("Для этого голосового сообщения нет сохраненной расшифровки")}
+                                                                            />
+                                                                        )}
+                                                                        {!voiceMessage && (
+                                                                            <audio controls className="block w-full min-w-0">
+                                                                                <source src={mediaUrl} type={`audio/${ext}`} />
+                                                                            </audio>
+                                                                        )}
                                                                         {renderDownloadLink(
                                                                             <FileAudioIcon className="w-4 h-4 text-green-500" />,
                                                                             msg.file_name || 'Скачать аудио'

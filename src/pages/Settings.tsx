@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { AppSettings, ThemeMode, readSettings, writeSettings } from "@/lib/settings";
 import { useI18n } from "@/lib/i18n";
+import { useToast } from "@/hooks/use-toast";
 
 const applyTheme = (theme: ThemeMode) => {
   const root = document.documentElement;
@@ -26,6 +27,10 @@ const Settings = () => {
     frameId: number;
   } | null>(null);
   const { t } = useI18n();
+  const { toast } = useToast();
+  const isInsecureNetworkPage =
+    !window.isSecureContext &&
+    !["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
 
   useEffect(() => {
     applyTheme(settings.theme);
@@ -38,6 +43,7 @@ const Settings = () => {
 
   const loadDevices = async () => {
     if (!navigator.mediaDevices?.enumerateDevices) return;
+    if (isInsecureNetworkPage) return;
 
     try {
       let list = await navigator.mediaDevices.enumerateDevices();
@@ -87,6 +93,15 @@ const Settings = () => {
     }
 
     try {
+      if (isInsecureNetworkPage) {
+        toast({
+          title: t("microphone"),
+          description: t("secureMediaHint"),
+          variant: "destructive",
+        });
+        return;
+      }
+
       window.dispatchEvent(new CustomEvent("itbird-microphone-test-start"));
       const useNoiseSuppression = settings.noiseSuppressionMode === "krisp";
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -135,12 +150,20 @@ const Settings = () => {
       window.dispatchEvent(new CustomEvent("itbird-microphone-test-stop"));
       setIsMicTesting(false);
       setMicLevel(0);
+      toast({
+        title: t("microphone"),
+        description: t("secureMediaHint"),
+        variant: "destructive",
+      });
     }
   };
 
-  const microphones = devices.filter((device) => device.kind === "audioinput");
-  const outputs = devices.filter((device) => device.kind === "audiooutput");
-  const cameras = devices.filter((device) => device.kind === "videoinput");
+  const selectableDevices = (kind: MediaDeviceKind) =>
+    devices.filter((device) => device.kind === kind && device.deviceId.trim() !== "" && device.deviceId !== "default");
+
+  const microphones = selectableDevices("audioinput");
+  const outputs = selectableDevices("audiooutput");
+  const cameras = selectableDevices("videoinput");
 
   return (
     <div className="min-h-full bg-gray-50 p-0 dark:bg-gray-900 sm:p-2 lg:p-4">
@@ -185,7 +208,19 @@ const Settings = () => {
               </div>
               <Switch
                 checked={settings.autoTranslate}
-                onCheckedChange={(checked) => update({ autoTranslate: checked })}
+                onCheckedChange={(checked) => update({ autoTranslate: checked, transcriptionEnabled: checked ? settings.transcriptionEnabled : false })}
+              />
+            </div>
+
+            <div className="flex items-center justify-between gap-4 rounded-md border p-4">
+              <div>
+                <Label>{t("transcription")}</Label>
+                <p className="text-sm text-muted-foreground">{t("transcriptionHint")}</p>
+              </div>
+              <Switch
+                checked={settings.autoTranslate && settings.transcriptionEnabled}
+                disabled={!settings.autoTranslate}
+                onCheckedChange={(checked) => update({ transcriptionEnabled: checked })}
               />
             </div>
 
@@ -219,6 +254,11 @@ const Settings = () => {
           </CardHeader>
           <CardContent className="space-y-6">
             <p className="text-sm text-muted-foreground">{t("devicesAccessHint")}</p>
+            {isInsecureNetworkPage && (
+              <p className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-200">
+                {t("secureMediaHint")}
+              </p>
+            )}
 
             <div className="space-y-2">
               <Label>{t("microphone")}</Label>

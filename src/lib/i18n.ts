@@ -40,6 +40,11 @@ const dictionary = {
     en: "When disabled, the translation language cannot be selected.",
   },
   translateLanguage: { ru: "Язык автоперевода", en: "Auto-translation language" },
+  transcription: { ru: "Транскрипция", en: "Transcription" },
+  transcriptionHint: {
+    ru: "Показывает, как читать переведенные сообщения. Работает только при включенном автопереводе.",
+    en: "Shows how to read translated messages. Works only when auto-translation is enabled.",
+  },
   callDevices: { ru: "Устройства для звонков", en: "Call devices" },
   callDevicesDescription: {
     ru: "Выберите микрофон, наушники и веб-камеру. Камеру можно оставить пустой, если ее нет.",
@@ -61,11 +66,15 @@ const dictionary = {
     ru: "Для списка устройств браузер может попросить доступ к микрофону или камере.",
     en: "The browser may ask for microphone or camera access to show device names.",
   },
+  secureMediaHint: {
+    ru: "На телефоне доступ к микрофону и камере работает только через HTTPS или localhost. Откройте сайт по HTTPS, иначе браузер не покажет запрос разрешения.",
+    en: "On phones, microphone and camera access works only over HTTPS or localhost. Open the site via HTTPS, otherwise the browser will not show the permission prompt.",
+  },
   noiseSuppression: { ru: "Шумоподавление", en: "Noise suppression" },
   noiseSuppressionOff: { ru: "Без шумоподавления", en: "No noise suppression" },
   noiseSuppressionKrisp: { ru: "Krisp", en: "Krisp" },
   krispHint: {
-    ru: "Krisp включит доступное браузерное подавление шума, эха и автоусиление. Полный Krisp SDK можно подключить отдельно.",
+    ru: "Krisp включает доступное браузерное подавление шума, эха и автоусиление. Полный Krisp SDK можно подключить отдельно.",
     en: "Krisp enables available browser noise suppression, echo cancellation and auto gain. Full Krisp SDK can be integrated separately.",
   },
 

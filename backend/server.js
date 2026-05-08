@@ -2949,7 +2949,7 @@ app.delete('/group-messages/:messageId', verifyToken, async (req, res) => {
 });
 
 app.post('/translate', verifyToken, async (req, res) => {
-    const { text, target } = req.body;
+    const { text, target, transcription } = req.body;
     if (!text || !target) {
         return res.status(400).json({ message: 'text и target обязательны' });
     }
@@ -2960,7 +2960,7 @@ app.post('/translate', verifyToken, async (req, res) => {
                 client: 'gtx',
                 sl: 'auto',
                 tl: target,
-                dt: 't',
+                dt: transcription ? ['t', 'rm'] : 't',
                 q: text,
             },
         });
@@ -2968,8 +2968,19 @@ app.post('/translate', verifyToken, async (req, res) => {
         const translated = Array.isArray(data?.[0])
             ? data[0].map((part) => part[0]).join('')
             : text;
+        const reading = transcription && Array.isArray(data?.[0])
+            ? data[0]
+                .map((part) => {
+                    if (typeof part?.[3] === 'string') return part[3];
+                    if (typeof part?.[2] === 'string' && part[2] !== text) return part[2];
+                    return '';
+                })
+                .filter(Boolean)
+                .join(' ')
+                .trim()
+            : '';
 
-        res.json({ translated });
+        res.json({ translated, transcription: transcription ? (reading || translated) : null });
     } catch (error) {
         console.error('Ошибка перевода:', error.message);
         res.status(502).json({ message: 'Не удалось перевести сообщение' });

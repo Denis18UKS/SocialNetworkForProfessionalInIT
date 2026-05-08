@@ -43,8 +43,12 @@ const iceServers: RTCConfiguration = {
 };
 
 const getMediaErrorMessage = (error: unknown) => {
+  if (!window.isSecureContext && !["localhost", "127.0.0.1", "::1"].includes(window.location.hostname)) {
+    return "На телефоне браузер запрашивает микрофон и камеру только через HTTPS или localhost. Откройте сайт по HTTPS, иначе окно разрешения не появится.";
+  }
+
   if (error instanceof DOMException && ["NotAllowedError", "PermissionDeniedError"].includes(error.name)) {
-    return "Доступ к микрофону или камере запрещен в браузере. Нажмите на значок замка в адресной строке, разрешите доступ для localhost и повторите звонок.";
+    return "Доступ к микрофону или камере запрещен в браузере. Нажмите на значок замка в адресной строке, разрешите доступ и повторите звонок.";
   }
 
   if (error instanceof DOMException && error.name === "NotFoundError") {
@@ -63,6 +67,9 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
   const remoteMediaRef = useRef<HTMLDivElement | null>(null);
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const deviceTestMuteRef = useRef<{ mic: boolean; sound: boolean } | null>(null);
+  const isCallingRef = useRef(false);
+  const liveCallRef = useRef(false);
+  const selfParticipantRef = useRef<CallParticipant | null>(null);
   const [isCalling, setIsCalling] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
@@ -71,11 +78,15 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [videoEnabled, setVideoEnabled] = useState(false);
   const [screenEnabled, setScreenEnabled] = useState(false);
+  const [selfParticipant, setSelfParticipant] = useState<CallParticipant | null>(null);
 
   const token = localStorage.getItem("token");
   const callableParticipants = participants.filter((participant) => participant.id !== currentUserId);
   const callTargets = mode === "private" ? callableParticipants.map((participant) => participant.id) : selectedIds;
-  const visibleCallParticipants = callableParticipants.filter((participant) => callTargets.includes(participant.id));
+  const visibleCallParticipants = [
+    ...(selfParticipant ? [selfParticipant] : []),
+    ...callableParticipants.filter((participant) => callTargets.includes(participant.id)),
+  ];
 
   const getAvatarUrl = (avatar?: string | null) => {
     if (!avatar) return "/images/default-avatar.png";
@@ -87,11 +98,74 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
     setSelectedIds(callableParticipants.map((participant) => participant.id));
   }, [participants, currentUserId]);
 
-  const sendSignal = (type: string, targetIds: number[], data: Record<string, unknown>) => {
-    socketRef.current?.send(JSON.stringify({ type, targetIds, data: { ...data, chatId, mode, title, callKind } }));
+  useEffect(() => {
+    selfParticipantRef.current = selfParticipant;
+  }, [selfParticipant]);
+
+  useEffect(() => {
+    if (!token || !currentUserId) return;
+
+    fetch("http://localhost:5000/profile", {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((profile) => {
+        if (!profile) return;
+        setSelfParticipant({
+          id: currentUserId,
+          username: profile.username || "Вы",
+          avatar: profile.avatar || null,
+        });
+      })
+      .catch(() => {
+        setSelfParticipant((current) => current || { id: currentUserId, username: "Вы" });
+      });
+  }, [token, currentUserId]);
+
+  const ensureSelfParticipant = async () => {
+    if (selfParticipantRef.current) return selfParticipantRef.current;
+    if (!token || !currentUserId) return null;
+
+    try {
+      const response = await fetch("http://localhost:5000/profile", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) throw new Error("profile");
+      const profile = await response.json();
+      const participant = {
+        id: currentUserId,
+        username: profile.username || "Вы",
+        avatar: profile.avatar || null,
+      };
+      selfParticipantRef.current = participant;
+      setSelfParticipant(participant);
+      return participant;
+    } catch {
+      const participant = { id: currentUserId, username: "Вы" };
+      selfParticipantRef.current = participant;
+      setSelfParticipant(participant);
+      return participant;
+    }
   };
 
-  const ensureLocalStream = async (kind: CallKind) => {
+  useEffect(() => {
+    isCallingRef.current = isCalling;
+  }, [isCalling]);
+
+  const sendSignal = (type: string, targetIds: number[], data: Record<string, unknown>) => {
+    const self = selfParticipantRef.current || selfParticipant;
+    const callParticipants = [
+      ...(self ? [self] : []),
+      ...callableParticipants.filter((participant) => targetIds.includes(participant.id)),
+    ];
+    socketRef.current?.send(JSON.stringify({
+      type,
+      targetIds,
+      data: { ...data, chatId, mode, title, callKind, callerName: self?.username, participants: callParticipants },
+    }));
+  };
+
+  const ensureLocalStream = async (kind: CallKind, forceVideoEnabled = videoEnabled) => {
     const settings = readSettings();
     if (!localStreamRef.current) {
       try {
@@ -118,7 +192,7 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
       track.enabled = micEnabled;
     });
     localStreamRef.current.getVideoTracks().forEach((track) => {
-      track.enabled = kind === "video" && videoEnabled;
+      track.enabled = kind === "video" && forceVideoEnabled;
     });
 
     if (localVideoRef.current) {
@@ -178,9 +252,12 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
     if (!currentUserId || targetIds.length === 0) return;
 
     try {
+      await ensureSelfParticipant();
       setCallKind(kind);
-      setVideoEnabled(kind === "video");
-      await ensureLocalStream(kind);
+      const shouldEnableVideo = kind === "video";
+      setVideoEnabled(shouldEnableVideo);
+      await ensureLocalStream(kind, shouldEnableVideo);
+      liveCallRef.current = true;
       setIsCalling(true);
       sendSignal("CALL_INVITE", targetIds, { fromName: title, callKind: kind });
 
@@ -289,6 +366,13 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
   }, [isCalling, micEnabled, soundEnabled]);
 
   const endCall = () => {
+    liveCallRef.current = false;
+    const windowWithCall = window as typeof window & {
+      __itbirdActiveCallEnd?: () => void;
+      __itbirdActiveCallToggleScreen?: () => void;
+    };
+    if (windowWithCall.__itbirdActiveCallEnd === endCall) delete windowWithCall.__itbirdActiveCallEnd;
+    delete windowWithCall.__itbirdActiveCallToggleScreen;
     const targetIds = Object.keys(peersRef.current).map(Number);
     if (targetIds.length > 0) sendSignal("CALL_HANGUP", targetIds, {});
     Object.values(peersRef.current).forEach((peer) => peer.close());
@@ -301,7 +385,26 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
     setIsCalling(false);
     setVideoEnabled(false);
     setScreenEnabled(false);
+    window.dispatchEvent(new CustomEvent("itbird-call-ended"));
   };
+
+  useEffect(() => {
+    if (!isCalling) return;
+    const windowWithCall = window as typeof window & { __itbirdActiveCallEnd?: () => void };
+    windowWithCall.__itbirdActiveCallEnd = endCall;
+    (windowWithCall as typeof windowWithCall & { __itbirdActiveCallToggleScreen?: () => void }).__itbirdActiveCallToggleScreen = () => {
+      void toggleScreenShare();
+    };
+    window.dispatchEvent(new CustomEvent("itbird-call-active", {
+      detail: { chatId, mode, title, callKind, targetIds: callTargets, participants: visibleCallParticipants },
+    }));
+    return () => {
+      if (!isCallingRef.current && windowWithCall.__itbirdActiveCallEnd === endCall) {
+        delete windowWithCall.__itbirdActiveCallEnd;
+        delete (windowWithCall as typeof windowWithCall & { __itbirdActiveCallToggleScreen?: () => void }).__itbirdActiveCallToggleScreen;
+      }
+    };
+  }, [isCalling, chatId, mode, title, callKind, callTargets.join(","), visibleCallParticipants.length]);
 
   useEffect(() => {
     if (!token || !currentUserId) return;
@@ -319,6 +422,7 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
       if (String(data.chatId) !== String(chatId) || data.mode !== mode) return;
 
       if (payload.type === "CALL_ACCEPT") {
+        liveCallRef.current = true;
         setIsCalling(true);
       }
 
@@ -338,6 +442,7 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
     };
 
     return () => {
+      if (isCallingRef.current || liveCallRef.current || localStreamRef.current || Object.keys(peersRef.current).length > 0) return;
       socket.close();
       endCall();
     };
