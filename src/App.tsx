@@ -40,11 +40,11 @@ const App = () => {
           <BrowserRouter>
             <RealtimeNotifications />
             <SidebarProvider>
-              <div className="min-h-screen flex w-full flex-col bg-background md:flex-row dark:bg-gray-950">
+              <div className="flex h-dvh w-full overflow-hidden bg-background dark:bg-gray-950">
                 <AppSidebar />
-                <div className="flex-1 flex flex-col min-h-screen">
+                <div className="flex min-w-0 flex-1 flex-col">
                   <Header />
-                  <main className="flex-1 p-2 md:p-4 overflow-auto">
+                  <main className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-4 lg:p-6">
                     <Routes>
                       <Route path="/" element={<Index />} />
                       <Route path="/register" element={<Register />} />

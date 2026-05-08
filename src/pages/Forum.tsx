@@ -8,7 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/use-toast";
 import { useNavigate, useParams } from "react-router-dom";
-import { MessageSquare, Plus, Check, ChevronLeft } from "lucide-react";
+import { MessageSquare, Plus, Check, ChevronLeft, Trash2 } from "lucide-react";
 import { useAuth } from "@/pages/AuthContext";
 import { motion } from "framer-motion";
 import CodeSnippet, { extractCodeBlocks, textWithoutCodeBlocks } from "@/components/CodeSnippet";
@@ -76,6 +76,8 @@ const Forum = () => {
         isAuthenticated &&
         currentUser &&
         (currentUser.role === 'admin' || currentUser.id === question.user_id);
+
+    const canDeleteQuestion = () => isAuthenticated && currentUser?.role === 'admin';
 
     const fetchQuestions = async () => {
         try {
@@ -195,12 +197,39 @@ const Forum = () => {
         }
     };
 
+    const handleDeleteQuestion = async (questionId: number) => {
+        if (!token || !canDeleteQuestion()) return;
+        if (!window.confirm("Вы уверены, что хотите удалить этот вопрос?")) return;
+
+        try {
+            const response = await fetch(`http://localhost:5000/forums/${questionId}`, {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${token}` },
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => null);
+                throw new Error(errorData?.message || "Не удалось удалить вопрос");
+            }
+
+            setQuestions(prev => prev.filter(q => q.id !== questionId));
+            if (selectedQuestion?.id === questionId) setSelectedQuestion(null);
+            toast({ title: "Вопрос удален", description: "Вопрос и ответы к нему удалены" });
+        } catch (error) {
+            toast({
+                title: "Ошибка",
+                description: error instanceof Error ? error.message : "Не удалось удалить вопрос",
+                variant: "destructive",
+            });
+        }
+    };
+
     useEffect(() => {
         fetchQuestions();
     }, []);
 
     return (
-        <div className="min-h-screen bg-gray-50 dark:bg-gray-900 p-4">
+        <div className="min-h-full bg-gray-50 p-0 dark:bg-gray-900 sm:p-2 lg:p-4">
             <div className="max-w-6xl mx-auto space-y-6">
                 <div className="flex items-center justify-between">
                     <Button
@@ -283,6 +312,20 @@ const Forum = () => {
                                         >
                                             <Check className="w-4 h-4" />
                                             Пометить как решённый
+                                        </Button>
+                                    )}
+                                    {canDeleteQuestion() && (
+                                        <Button
+                                            size="sm"
+                                            variant="destructive"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleDeleteQuestion(q.id);
+                                            }}
+                                            className="gap-1"
+                                        >
+                                            <Trash2 className="w-4 h-4" />
+                                            Удалить
                                         </Button>
                                     )}
                                 </div>

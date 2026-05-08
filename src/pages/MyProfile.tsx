@@ -243,7 +243,7 @@ const MyProfile = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 py-8 px-4 sm:px-6 lg:px-8">
+    <div className="min-h-full bg-gray-50 px-0 py-4 dark:bg-gray-900 sm:px-4 sm:py-6 lg:px-8">
       <div className="max-w-7xl mx-auto space-y-8">
         {/* User Profile Card */}
         <motion.div
@@ -297,6 +297,9 @@ const MyProfile = () => {
                   <CardDescription className="mt-1">
                     {repositories.length} репозиториев
                   </CardDescription>
+                  {user.user_tag && (
+                    <p className="mt-1 text-sm font-medium text-[#6E59A5]">@{user.user_tag}</p>
+                  )}
                 </div>
                 <Tabs value={activeProvider} onValueChange={(value) => setActiveProvider(value as "github" | "gitlab")}>
                   <TabsList>

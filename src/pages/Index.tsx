@@ -246,8 +246,8 @@ const Index = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 px-4 py-12 dark:bg-gray-900 sm:px-6 lg:px-8">
-      <div className="mx-auto max-w-7xl space-y-12">
+    <div className="min-h-full bg-gray-50 px-0 py-4 dark:bg-gray-900 sm:px-2 sm:py-6 lg:px-4 lg:py-8">
+      <div className="mx-auto max-w-7xl space-y-8 sm:space-y-10 lg:space-y-12">
         <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
           <div className="mb-8 flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
             <div>

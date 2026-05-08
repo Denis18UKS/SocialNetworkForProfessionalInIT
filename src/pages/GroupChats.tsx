@@ -12,6 +12,12 @@ import { useToast } from "@/components/ui/use-toast";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
     FileIcon,
     FileImageIcon,
     FileVideoIcon,
@@ -27,16 +33,19 @@ import {
     Eraser,
     UserMinus,
     LogOut,
+    ChevronLeft,
     ChevronUp,
     X,
     Users,
-    Plus
+    Plus,
+    MoreVertical
 } from 'lucide-react';
 import { format } from "date-fns";
 import { ru } from "date-fns/locale";
 import { motion, AnimatePresence } from "framer-motion";
 import { getWsUrl, readSettings } from "@/lib/settings";
 import { readOnlineUserIds, subscribeOnlineUserIds, writeOnlineUserIds } from "@/lib/realtime";
+import VoiceCallControls from "@/components/VoiceCallControls";
 
 import { Smile, Mic } from 'lucide-react';
 import EmojiPicker, { EmojiClickData } from 'emoji-picker-react';
@@ -818,15 +827,15 @@ const GroupChats = () => {
     }
 
     return (
-        <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+        <div className="h-full min-h-[calc(100dvh-5rem)] overflow-hidden bg-gray-50 dark:bg-gray-900">
             <ToastContainer position="top-right" autoClose={3000} />
-            <div className="flex h-screen">
+            <div className="flex h-full min-h-0">
                 {/* Список групповых чатов */}
                 <motion.aside
                     initial={{ x: -20, opacity: 0 }}
                     animate={{ x: 0, opacity: 1 }}
                     transition={{ duration: 0.3 }}
-                    className="w-80 border-r border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800"
+                    className={`${selectedChat ? "hidden md:block" : "block"} h-full w-full shrink-0 border-r border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800 md:w-80`}
                 >
                     <Card className="h-full rounded-none border-0">
                         <CardHeader className="border-b border-gray-200 dark:border-gray-700">
@@ -888,26 +897,38 @@ const GroupChats = () => {
                 </motion.aside>
 
                 {/* Основной чат */}
-                <div className="flex-1 flex flex-col">
+                <div className={`${selectedChat ? "flex" : "hidden md:flex"} min-h-0 flex-1 flex-col`}>
                     {selectedChat ? (
                         <>
                             {/* Шапка чата */}
-                            <Card className="rounded-none border-0 border-b border-gray-200 dark:border-gray-700">
+                            <Card className="shrink-0 rounded-none border-0 border-b border-gray-200 dark:border-gray-700">
                                 <CardHeader className="py-3">
-                                    <div className="flex items-center justify-between">
-                                        <div className="flex items-center space-x-3">
+                                    <div className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                                        <div className="flex min-w-0 items-center space-x-3">
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                className="h-9 w-9 shrink-0 p-0 md:hidden"
+                                                onClick={() => {
+                                                    setSelectedChat(null);
+                                                    navigate('/group-chats');
+                                                }}
+                                                title="К списку групп"
+                                            >
+                                                <ChevronLeft className="h-5 w-5" />
+                                            </Button>
                                             <Avatar>
                                                 <AvatarImage src={getAvatarUrl(selectedChat.avatar)} />
                                                 <AvatarFallback>{selectedChat.name.charAt(0)}</AvatarFallback>
                                             </Avatar>
-                                            <div>
-                                                <CardTitle>{selectedChat.name}</CardTitle>
+                                            <div className="min-w-0">
+                                                <CardTitle className="truncate">{selectedChat.name}</CardTitle>
                                                 <CardDescription className="text-sm">
                                                     {chatMembers.length} участников
                                                 </CardDescription>
                                             </div>
                                         </div>
-                                        <div className="flex min-w-0 items-center gap-2">
+                                        <div className="flex min-w-0 flex-wrap items-center gap-2 lg:justify-end">
                                             {pinnedMessage && (
                                                 <button
                                                     type="button"
@@ -924,9 +945,13 @@ const GroupChats = () => {
                                                     </div>
                                                 </button>
                                             )}
-                                            <Button variant="ghost" size="sm" onClick={handleClearGroupChat} title="Очистить чат">
-                                                <Eraser className="w-4 h-4" />
-                                            </Button>
+                                            <VoiceCallControls
+                                                currentUserId={currentUser?.id}
+                                                mode="group"
+                                                chatId={selectedChat.id}
+                                                title={selectedChat.name}
+                                                participants={chatMembers.map((member) => ({ id: member.id, username: member.username, avatar: member.avatar }))}
+                                            />
                                             <Button
                                                 variant="ghost"
                                                 size="sm"
@@ -935,15 +960,30 @@ const GroupChats = () => {
                                             >
                                                 <Users className="w-4 h-4" />
                                             </Button>
-                                            {selectedChat.creator_id === currentUser?.id ? (
-                                                <Button variant="ghost" size="sm" onClick={handleDeleteGroupChat} title="Удалить группу">
-                                                    <Trash2 className="w-4 h-4 text-red-500" />
-                                                </Button>
-                                            ) : (
-                                                <Button variant="ghost" size="sm" onClick={handleLeaveGroupChat} title="Покинуть группу">
-                                                    <LogOut className="w-4 h-4" />
-                                                </Button>
-                                            )}
+                                            <DropdownMenu>
+                                                <DropdownMenuTrigger asChild>
+                                                    <Button variant="ghost" size="sm" className="h-9 w-9 p-0" title="Действия чата">
+                                                        <MoreVertical className="h-4 w-4" />
+                                                    </Button>
+                                                </DropdownMenuTrigger>
+                                                <DropdownMenuContent align="end">
+                                                    <DropdownMenuItem onClick={handleClearGroupChat}>
+                                                        <Eraser className="mr-2 h-4 w-4" />
+                                                        Очистить чат
+                                                    </DropdownMenuItem>
+                                                    {selectedChat.creator_id === currentUser?.id ? (
+                                                        <DropdownMenuItem onClick={handleDeleteGroupChat} className="text-red-600 focus:text-red-600">
+                                                            <Trash2 className="mr-2 h-4 w-4" />
+                                                            Удалить группу
+                                                        </DropdownMenuItem>
+                                                    ) : (
+                                                        <DropdownMenuItem onClick={handleLeaveGroupChat}>
+                                                            <LogOut className="mr-2 h-4 w-4" />
+                                                            Покинуть группу
+                                                        </DropdownMenuItem>
+                                                    )}
+                                                </DropdownMenuContent>
+                                            </DropdownMenu>
                                         </div>
                                     </div>
                                 </CardHeader>

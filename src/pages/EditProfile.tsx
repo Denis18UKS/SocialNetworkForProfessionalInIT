@@ -14,6 +14,7 @@ const normalizeUserTag = (value: string) => value.trim().replace(/^@+/, "").toLo
 
 const EditProfile = () => {
   const [avatar, setAvatar] = useState<File | null>(null);
+  const [currentAvatar, setCurrentAvatar] = useState("");
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
   const [userTag, setUserTag] = useState("");
@@ -54,6 +55,7 @@ const EditProfile = () => {
         setGithubUsername(user.github_username || "");
         setGitlabUsername(user.gitlab_username || "");
         setSkills(user.skills || "");
+        setCurrentAvatar(user.avatar || "");
       } catch (err) {
         setError(err instanceof Error ? err.message : "Ошибка при загрузке профиля");
       } finally {
@@ -163,6 +165,12 @@ const EditProfile = () => {
     setAvatar(file);
   };
 
+  const getAvatarUrl = (value: string) => {
+    if (!value) return "";
+    if (/^https?:\/\//i.test(value)) return value;
+    return `http://localhost:5000${value}`;
+  };
+
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gray-50 dark:bg-gray-900">
@@ -172,7 +180,7 @@ const EditProfile = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 px-4 py-8 dark:bg-gray-900 sm:px-6 lg:px-8">
+    <div className="min-h-full bg-gray-50 px-0 py-4 dark:bg-gray-900 sm:px-4 sm:py-6 lg:px-8">
       <div className="mx-auto max-w-3xl space-y-6">
         <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>
           <Button variant="ghost" onClick={() => navigate(-1)} className="flex items-center gap-2 text-[#6E59A5] hover:bg-[#6E59A5]/10">
@@ -196,6 +204,8 @@ const EditProfile = () => {
                     <Avatar className="h-32 w-32 border-4 border-[#6E59A5]/20 shadow-lg">
                       {avatar ? (
                         <AvatarImage src={URL.createObjectURL(avatar)} />
+                      ) : currentAvatar ? (
+                        <AvatarImage src={getAvatarUrl(currentAvatar)} />
                       ) : (
                         <AvatarFallback className="bg-[#6E59A5] text-4xl text-white">
                           {username.charAt(0).toUpperCase() || "U"}

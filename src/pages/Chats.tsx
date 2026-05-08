@@ -12,6 +12,12 @@ import { useToast } from "@/components/ui/use-toast";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
     FileIcon,
     FileImageIcon,
     FileVideoIcon,
@@ -26,7 +32,9 @@ import {
     PinOff,
     Ban,
     Eraser,
+    ChevronLeft,
     ChevronUp,
+    MoreVertical,
     X
 } from 'lucide-react';
 import { format } from "date-fns";
@@ -34,6 +42,7 @@ import { ru } from "date-fns/locale";
 import { motion, AnimatePresence } from "framer-motion";
 import { getWsUrl, readSettings } from "@/lib/settings";
 import { readOnlineUserIds, subscribeOnlineUserIds, writeOnlineUserIds } from "@/lib/realtime";
+import VoiceCallControls from "@/components/VoiceCallControls";
 
 import { Smile, Mic } from 'lucide-react';
 import EmojiPicker, { EmojiClickData } from 'emoji-picker-react';
@@ -746,7 +755,7 @@ const Chats = () => {
     }
 
     return (
-        <div className="h-[calc(100vh-5rem)] min-h-0 overflow-hidden bg-gray-50 dark:bg-gray-900">
+        <div className="h-full min-h-[calc(100dvh-5rem)] overflow-hidden bg-gray-50 dark:bg-gray-900">
             <ToastContainer position="top-right" autoClose={3000} />
             <div className="flex h-full min-h-0">
                 {/* Список чатов */}
@@ -754,7 +763,7 @@ const Chats = () => {
                     initial={{ x: -20, opacity: 0 }}
                     animate={{ x: 0, opacity: 1 }}
                     transition={{ duration: 0.3 }}
-                    className="w-80 shrink-0 border-r border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800"
+                    className={`${selectedUser ? "hidden md:block" : "block"} h-full w-full shrink-0 border-r border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800 md:w-80`}
                 >
                     <Card className="h-full rounded-none border-0">
                         <CardHeader className="border-b border-gray-200 dark:border-gray-700">
@@ -810,13 +819,25 @@ const Chats = () => {
                 </motion.aside>
 
                 {/* Основной чат */}
-                <div className="min-h-0 flex-1 flex flex-col">
+                <div className={`${selectedUser ? "flex" : "hidden md:flex"} min-h-0 flex-1 flex-col`}>
                     {selectedUser ? (
                         <>
                             {/* Шапка чата */}
                             <Card className="shrink-0 rounded-none border-0 border-b border-gray-200 dark:border-gray-700">
                                 <CardHeader className="py-3">
-                                    <div className="flex items-center space-x-3">
+                                    <div className="flex min-w-0 items-center space-x-3">
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className="h-9 w-9 shrink-0 p-0 md:hidden"
+                                            onClick={() => {
+                                                setSelectedUser(null);
+                                                navigate('/chats');
+                                            }}
+                                            title="К списку чатов"
+                                        >
+                                            <ChevronLeft className="h-5 w-5" />
+                                        </Button>
                                         <div className="relative">
                                         <Avatar>
                                             <AvatarImage src={getAvatarUrl(selectedUser.avatar)} />
@@ -824,14 +845,14 @@ const Chats = () => {
                                         </Avatar>
                                             <span className={`absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white dark:border-gray-950 ${onlineUserIds.includes(selectedUser.id) ? 'bg-green-500' : 'bg-gray-400'}`} />
                                         </div>
-                                        <div>
-                                            <CardTitle>{selectedUser.username}</CardTitle>
+                                        <div className="min-w-0">
+                                            <CardTitle className="truncate">{selectedUser.username}</CardTitle>
                                             <CardDescription className="text-sm">
                                                 {onlineUserIds.includes(selectedUser.id) ? "Онлайн" : "Оффлайн"}
                                             </CardDescription>
                                         </div>
                                     </div>
-                                    <div className="mt-3 flex items-center justify-end gap-2">
+                                    <div className="mt-3 flex min-w-0 flex-wrap items-center justify-end gap-2">
                                         {pinnedMessages.map((pinnedMessage) => (
                                             <button
                                                 key={`pinned-${pinnedMessage.id}-${pinnedMessage.is_pinned ? 'all' : 'self'}`}
@@ -849,14 +870,30 @@ const Chats = () => {
                                                 </div>
                                             </button>
                                         ))}
-                                        <Button variant="outline" size="sm" onClick={handleClearChat} title="Очистить чат">
-                                            <Eraser className="w-4 h-4 mr-2" />
-                                            Очистить
-                                        </Button>
-                                        <Button variant="outline" size="sm" onClick={handleToggleBlockUser} title={isSelectedUserBlocked ? "Разблокировать" : "В черный список"}>
-                                            <Ban className={`w-4 h-4 mr-2 ${isSelectedUserBlocked ? 'text-red-500' : ''}`} />
-                                            {isSelectedUserBlocked ? "Разблокировать" : "В черный список"}
-                                        </Button>
+                                        <VoiceCallControls
+                                            currentUserId={currentUser?.id}
+                                            mode="private"
+                                            chatId={chatId || selectedUser.id}
+                                            title={selectedUser.username}
+                                            participants={[selectedUser]}
+                                        />
+                                        <DropdownMenu>
+                                            <DropdownMenuTrigger asChild>
+                                                <Button variant="outline" size="sm" className="h-9 w-9 p-0" title="Действия чата">
+                                                    <MoreVertical className="h-4 w-4" />
+                                                </Button>
+                                            </DropdownMenuTrigger>
+                                            <DropdownMenuContent align="end">
+                                                <DropdownMenuItem onClick={handleClearChat}>
+                                                    <Eraser className="mr-2 h-4 w-4" />
+                                                    Очистить чат
+                                                </DropdownMenuItem>
+                                                <DropdownMenuItem onClick={handleToggleBlockUser}>
+                                                    <Ban className={`mr-2 h-4 w-4 ${isSelectedUserBlocked ? 'text-red-500' : ''}`} />
+                                                    {isSelectedUserBlocked ? "Разблокировать" : "В черный список"}
+                                                </DropdownMenuItem>
+                                            </DropdownMenuContent>
+                                        </DropdownMenu>
                                     </div>
                                 </CardHeader>
                             </Card>

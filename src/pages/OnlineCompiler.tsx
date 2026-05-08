@@ -212,7 +212,7 @@ const OnlineCompiler = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 p-4 text-gray-950 dark:bg-gray-950 dark:text-gray-50">
+    <div className="min-h-full bg-gray-50 p-0 text-gray-950 dark:bg-gray-950 dark:text-gray-50 sm:p-2 lg:p-4">
       <div className="mx-auto flex max-w-7xl flex-col gap-4">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-3">

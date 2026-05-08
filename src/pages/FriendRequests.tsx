@@ -189,7 +189,7 @@ const FriendRequests = () => {
     };
 
     return (
-        <div className="min-h-screen bg-gray-50 dark:bg-gray-900 p-4">
+        <div className="min-h-full bg-gray-50 p-0 dark:bg-gray-900 sm:p-2 lg:p-4">
             <div className="max-w-4xl mx-auto">
                 <Card className="shadow-lg">
                     <CardHeader className="border-b">

@@ -1,0 +1,467 @@
+import { useEffect, useRef, useState } from "react";
+import {
+  ChevronDown,
+  Headphones,
+  Mic,
+  MicOff,
+  Phone,
+  PhoneCall,
+  PhoneOff,
+  ScreenShare,
+  ScreenShareOff,
+  Users,
+  Video,
+  VideoOff,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
+import { useToast } from "@/hooks/use-toast";
+import { getWsUrl, readSettings } from "@/lib/settings";
+
+type CallMode = "private" | "group";
+type CallKind = "voice" | "video";
+
+type CallParticipant = {
+  id: number;
+  username: string;
+  avatar?: string | null;
+};
+
+type VoiceCallControlsProps = {
+  currentUserId?: number;
+  mode: CallMode;
+  chatId: number | string;
+  title: string;
+  participants: CallParticipant[];
+};
+
+const iceServers: RTCConfiguration = {
+  iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+};
+
+const getMediaErrorMessage = (error: unknown) => {
+  if (error instanceof DOMException && ["NotAllowedError", "PermissionDeniedError"].includes(error.name)) {
+    return "Доступ к микрофону или камере запрещен в браузере. Нажмите на значок замка в адресной строке, разрешите доступ для localhost и повторите звонок.";
+  }
+
+  if (error instanceof DOMException && error.name === "NotFoundError") {
+    return "Не найден микрофон или камера. Подключите устройство и повторите звонок.";
+  }
+
+  return "Не удалось получить доступ к устройствам. Проверьте разрешения браузера и повторите звонок.";
+};
+
+const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }: VoiceCallControlsProps) => {
+  const { toast } = useToast();
+  const socketRef = useRef<WebSocket | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const screenStreamRef = useRef<MediaStream | null>(null);
+  const peersRef = useRef<Record<number, RTCPeerConnection>>({});
+  const remoteMediaRef = useRef<HTMLDivElement | null>(null);
+  const localVideoRef = useRef<HTMLVideoElement | null>(null);
+  const deviceTestMuteRef = useRef<{ mic: boolean; sound: boolean } | null>(null);
+  const [isCalling, setIsCalling] = useState(false);
+  const [showPicker, setShowPicker] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [callKind, setCallKind] = useState<CallKind>("voice");
+  const [micEnabled, setMicEnabled] = useState(true);
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [videoEnabled, setVideoEnabled] = useState(false);
+  const [screenEnabled, setScreenEnabled] = useState(false);
+
+  const token = localStorage.getItem("token");
+  const callableParticipants = participants.filter((participant) => participant.id !== currentUserId);
+  const callTargets = mode === "private" ? callableParticipants.map((participant) => participant.id) : selectedIds;
+  const visibleCallParticipants = callableParticipants.filter((participant) => callTargets.includes(participant.id));
+
+  const getAvatarUrl = (avatar?: string | null) => {
+    if (!avatar) return "/images/default-avatar.png";
+    if (/^https?:\/\//i.test(avatar)) return avatar;
+    return `http://localhost:5000${avatar}`;
+  };
+
+  useEffect(() => {
+    setSelectedIds(callableParticipants.map((participant) => participant.id));
+  }, [participants, currentUserId]);
+
+  const sendSignal = (type: string, targetIds: number[], data: Record<string, unknown>) => {
+    socketRef.current?.send(JSON.stringify({ type, targetIds, data: { ...data, chatId, mode, title, callKind } }));
+  };
+
+  const ensureLocalStream = async (kind: CallKind) => {
+    const settings = readSettings();
+    if (!localStreamRef.current) {
+      try {
+        localStreamRef.current = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            ...(settings.microphoneDeviceId ? { deviceId: { exact: settings.microphoneDeviceId } } : {}),
+            echoCancellation: settings.noiseSuppressionMode === "krisp",
+            noiseSuppression: settings.noiseSuppressionMode === "krisp",
+            autoGainControl: settings.noiseSuppressionMode === "krisp",
+          },
+          video: kind === "video"
+            ? settings.cameraDeviceId
+              ? { deviceId: { exact: settings.cameraDeviceId } }
+              : true
+            : false,
+        });
+      } catch (error) {
+        toast({ title: "Ошибка звонка", description: getMediaErrorMessage(error), variant: "destructive" });
+        throw error;
+      }
+    }
+
+    localStreamRef.current.getAudioTracks().forEach((track) => {
+      track.enabled = micEnabled;
+    });
+    localStreamRef.current.getVideoTracks().forEach((track) => {
+      track.enabled = kind === "video" && videoEnabled;
+    });
+
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = localStreamRef.current;
+    }
+
+    return localStreamRef.current;
+  };
+
+  const attachRemoteStream = (peerId: number, stream: MediaStream) => {
+    if (!remoteMediaRef.current) return;
+
+    const hasVideo = stream.getVideoTracks().length > 0;
+    const selector = hasVideo ? `video[data-peer-id="${peerId}"]` : `audio[data-peer-id="${peerId}"]`;
+    let media = remoteMediaRef.current.querySelector<HTMLMediaElement>(selector);
+
+    if (!media) {
+      media = document.createElement(hasVideo ? "video" : "audio");
+      media.dataset.peerId = String(peerId);
+      media.autoplay = true;
+      if (hasVideo) {
+        (media as HTMLVideoElement).playsInline = true;
+        media.className = "h-28 w-44 rounded-lg bg-black object-cover";
+      } else {
+        media.className = "hidden";
+      }
+      remoteMediaRef.current.appendChild(media);
+    }
+
+    media.muted = !soundEnabled;
+    media.srcObject = stream;
+    const outputId = readSettings().audioOutputDeviceId;
+    if (outputId && "setSinkId" in media) {
+      (media as HTMLMediaElement & { setSinkId: (sinkId: string) => Promise<void> })
+        .setSinkId(outputId)
+        .catch(() => undefined);
+    }
+  };
+
+  const createPeer = async (peerId: number, kind: CallKind) => {
+    if (peersRef.current[peerId]) return peersRef.current[peerId];
+
+    const stream = await ensureLocalStream(kind);
+    const peer = new RTCPeerConnection(iceServers);
+    stream.getTracks().forEach((track) => peer.addTrack(track, stream));
+
+    peer.ontrack = (event) => attachRemoteStream(peerId, event.streams[0]);
+    peer.onicecandidate = (event) => {
+      if (event.candidate) sendSignal("CALL_ICE", [peerId], { candidate: event.candidate });
+    };
+
+    peersRef.current[peerId] = peer;
+    return peer;
+  };
+
+  const startCall = async (targetIds: number[], kind: CallKind) => {
+    if (!currentUserId || targetIds.length === 0) return;
+
+    try {
+      setCallKind(kind);
+      setVideoEnabled(kind === "video");
+      await ensureLocalStream(kind);
+      setIsCalling(true);
+      sendSignal("CALL_INVITE", targetIds, { fromName: title, callKind: kind });
+
+      for (const targetId of targetIds) {
+        const peer = await createPeer(targetId, kind);
+        const offer = await peer.createOffer();
+        await peer.setLocalDescription(offer);
+        sendSignal("CALL_OFFER", [targetId], { description: offer, callKind: kind });
+      }
+
+      setShowPicker(false);
+    } catch {
+      setIsCalling(false);
+    }
+  };
+
+  const renegotiate = async (targetId: number) => {
+    const peer = peersRef.current[targetId];
+    if (!peer) return;
+    const offer = await peer.createOffer();
+    await peer.setLocalDescription(offer);
+    sendSignal("CALL_OFFER", [targetId], { description: offer, callKind });
+  };
+
+  const toggleMic = () => {
+    const next = !micEnabled;
+    localStreamRef.current?.getAudioTracks().forEach((track) => {
+      track.enabled = next;
+    });
+    setMicEnabled(next);
+  };
+
+  const toggleSound = () => {
+    const next = !soundEnabled;
+    remoteMediaRef.current?.querySelectorAll<HTMLMediaElement>("audio, video").forEach((media) => {
+      media.muted = !next;
+    });
+    setSoundEnabled(next);
+  };
+
+  const toggleVideo = () => {
+    const next = !videoEnabled;
+    localStreamRef.current?.getVideoTracks().forEach((track) => {
+      track.enabled = next;
+    });
+    setVideoEnabled(next);
+  };
+
+  const toggleScreenShare = async () => {
+    if (screenEnabled) {
+      screenStreamRef.current?.getTracks().forEach((track) => track.stop());
+      screenStreamRef.current = null;
+      setScreenEnabled(false);
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      screenStreamRef.current = stream;
+      stream.getTracks().forEach((track) => {
+        Object.values(peersRef.current).forEach((peer) => peer.addTrack(track, stream));
+        track.onended = () => setScreenEnabled(false);
+      });
+      setScreenEnabled(true);
+      await Promise.all(Object.keys(peersRef.current).map((id) => renegotiate(Number(id))));
+    } catch {
+      toast({ title: "Демонстрация экрана", description: "Не удалось начать демонстрацию экрана", variant: "destructive" });
+    }
+  };
+
+  useEffect(() => {
+    const handleDeviceTestStart = () => {
+      if (!isCalling || deviceTestMuteRef.current) return;
+      deviceTestMuteRef.current = { mic: micEnabled, sound: soundEnabled };
+      localStreamRef.current?.getAudioTracks().forEach((track) => {
+        track.enabled = false;
+      });
+      remoteMediaRef.current?.querySelectorAll<HTMLMediaElement>("audio, video").forEach((media) => {
+        media.muted = true;
+      });
+      setMicEnabled(false);
+      setSoundEnabled(false);
+    };
+
+    const handleDeviceTestStop = () => {
+      const previous = deviceTestMuteRef.current;
+      if (!previous) return;
+      localStreamRef.current?.getAudioTracks().forEach((track) => {
+        track.enabled = previous.mic;
+      });
+      remoteMediaRef.current?.querySelectorAll<HTMLMediaElement>("audio, video").forEach((media) => {
+        media.muted = !previous.sound;
+      });
+      setMicEnabled(previous.mic);
+      setSoundEnabled(previous.sound);
+      deviceTestMuteRef.current = null;
+    };
+
+    window.addEventListener("itbird-microphone-test-start", handleDeviceTestStart);
+    window.addEventListener("itbird-microphone-test-stop", handleDeviceTestStop);
+
+    return () => {
+      window.removeEventListener("itbird-microphone-test-start", handleDeviceTestStart);
+      window.removeEventListener("itbird-microphone-test-stop", handleDeviceTestStop);
+    };
+  }, [isCalling, micEnabled, soundEnabled]);
+
+  const endCall = () => {
+    const targetIds = Object.keys(peersRef.current).map(Number);
+    if (targetIds.length > 0) sendSignal("CALL_HANGUP", targetIds, {});
+    Object.values(peersRef.current).forEach((peer) => peer.close());
+    peersRef.current = {};
+    localStreamRef.current?.getTracks().forEach((track) => track.stop());
+    screenStreamRef.current?.getTracks().forEach((track) => track.stop());
+    localStreamRef.current = null;
+    screenStreamRef.current = null;
+    remoteMediaRef.current?.replaceChildren();
+    setIsCalling(false);
+    setVideoEnabled(false);
+    setScreenEnabled(false);
+  };
+
+  useEffect(() => {
+    if (!token || !currentUserId) return;
+
+    const socket = new WebSocket(getWsUrl());
+    socketRef.current = socket;
+    socket.onopen = () => socket.send(JSON.stringify({ type: "AUTH", token }));
+    socket.onmessage = async (event) => {
+      const payload = JSON.parse(event.data);
+      if (!payload.type?.startsWith("CALL_")) return;
+
+      const data = payload.data || {};
+      if (data.senderId === currentUserId) return;
+      if (!data.targetIds?.includes(currentUserId)) return;
+      if (String(data.chatId) !== String(chatId) || data.mode !== mode) return;
+
+      if (payload.type === "CALL_ACCEPT") {
+        setIsCalling(true);
+      }
+
+      if (payload.type === "CALL_ANSWER") {
+        const peer = peersRef.current[data.senderId];
+        if (peer) await peer.setRemoteDescription(new RTCSessionDescription(data.description));
+      }
+
+      if (payload.type === "CALL_ICE") {
+        const peer = peersRef.current[data.senderId];
+        if (peer && data.candidate) await peer.addIceCandidate(new RTCIceCandidate(data.candidate));
+      }
+
+      if (payload.type === "CALL_HANGUP") {
+        endCall();
+      }
+    };
+
+    return () => {
+      socket.close();
+      endCall();
+    };
+  }, [token, currentUserId, chatId, mode]);
+
+  const callButton = (kind: CallKind) => (
+    <Button
+      variant={kind === "video" ? "outline" : "ghost"}
+      size="sm"
+      onClick={() => (mode === "group" ? (setCallKind(kind), setShowPicker(true)) : startCall(callTargets, kind))}
+      disabled={callableParticipants.length === 0}
+      className="gap-2"
+      title={kind === "video" ? "Видеозвонок" : "Голосовой звонок"}
+    >
+      {kind === "video" ? <Video className="h-4 w-4" /> : <Phone className="h-4 w-4" />}
+    </Button>
+  );
+
+  return (
+    <>
+      {!isCalling ? (
+        <div className="flex items-center gap-1">
+          {callButton("voice")}
+          {callButton("video")}
+        </div>
+      ) : (
+        <div className="fixed inset-x-0 bottom-4 z-50 mx-auto flex w-[min(760px,calc(100vw-24px))] flex-col items-center gap-4 rounded-2xl border border-white/10 bg-black/90 p-4 text-white shadow-2xl">
+          <div className="flex w-full items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold">{title}</div>
+              <div className="text-xs text-white/60">{mode === "group" ? "Групповой звонок" : "Личный звонок"}</div>
+            </div>
+            <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+              {visibleCallParticipants.map((participant) => (
+                <div key={participant.id} className="flex flex-col items-center gap-1">
+                  <img
+                    src={getAvatarUrl(participant.avatar)}
+                    alt={participant.username}
+                    className="h-12 w-12 rounded-full border-2 border-white/20 bg-gray-800 object-cover"
+                  />
+                  <span className="max-w-16 truncate text-[11px] text-white/70">{participant.username}</span>
+                </div>
+              ))}
+              <div ref={remoteMediaRef} className="flex min-w-0 flex-wrap justify-end gap-2" />
+            </div>
+          </div>
+
+          {callKind === "video" && (
+            <video ref={localVideoRef} autoPlay muted playsInline className="h-28 w-44 rounded-lg bg-gray-950 object-cover" />
+          )}
+
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <div className="flex overflow-hidden rounded-lg border border-white/10 bg-white/10">
+              <Button variant="ghost" size="sm" onClick={toggleMic} className="rounded-none text-white hover:bg-white/15 hover:text-white">
+                {micEnabled ? <Mic className="h-4 w-4" /> : <MicOff className="h-4 w-4 text-red-300" />}
+              </Button>
+              <Button variant="ghost" size="sm" className="rounded-none px-2 text-white hover:bg-white/15 hover:text-white">
+                <ChevronDown className="h-4 w-4" />
+              </Button>
+            </div>
+
+            <div className="flex overflow-hidden rounded-lg border border-white/10 bg-white/10">
+              <Button variant="ghost" size="sm" onClick={toggleVideo} className="rounded-none text-white hover:bg-white/15 hover:text-white">
+                {videoEnabled ? <Video className="h-4 w-4" /> : <VideoOff className="h-4 w-4 text-red-300" />}
+              </Button>
+              <Button variant="ghost" size="sm" className="rounded-none px-2 text-white hover:bg-white/15 hover:text-white">
+                <ChevronDown className="h-4 w-4" />
+              </Button>
+            </div>
+
+            <div className="flex overflow-hidden rounded-lg border border-white/10 bg-white/10">
+              <Button variant="ghost" size="sm" onClick={toggleSound} className="rounded-none text-white hover:bg-white/15 hover:text-white">
+                {soundEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4 text-red-300" />}
+              </Button>
+              <Button variant="ghost" size="sm" className="rounded-none px-2 text-white hover:bg-white/15 hover:text-white">
+                <Headphones className="h-4 w-4" />
+              </Button>
+            </div>
+
+            <Button variant="ghost" size="sm" onClick={toggleScreenShare} className="bg-white/10 text-white hover:bg-white/15 hover:text-white">
+              {screenEnabled ? <ScreenShareOff className="h-4 w-4" /> : <ScreenShare className="h-4 w-4" />}
+            </Button>
+
+            <Button variant="destructive" size="sm" onClick={endCall} className="px-6">
+              <PhoneOff className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <Dialog open={showPicker} onOpenChange={setShowPicker}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              {callKind === "video" ? <Video className="h-5 w-5" /> : <Users className="h-5 w-5" />}
+              Выберите участников звонка
+            </DialogTitle>
+          </DialogHeader>
+          <div className="max-h-72 space-y-3 overflow-y-auto">
+            {callableParticipants.map((participant) => (
+              <label key={participant.id} className="flex items-center gap-3 rounded-md border p-3">
+                <Checkbox
+                  checked={selectedIds.includes(participant.id)}
+                  onCheckedChange={(checked) => {
+                    setSelectedIds((prev) =>
+                      checked ? [...prev, participant.id] : prev.filter((id) => id !== participant.id)
+                    );
+                  }}
+                />
+                <span>{participant.username}</span>
+              </label>
+            ))}
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setShowPicker(false)}>Отмена</Button>
+            <Button onClick={() => startCall(callTargets, callKind)} disabled={callTargets.length === 0} className="gap-2">
+              <PhoneCall className="h-4 w-4" />
+              Позвонить
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+};
+
+export default VoiceCallControls;

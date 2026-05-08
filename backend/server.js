@@ -75,6 +75,12 @@ const WebSocket = require('ws');
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 const onlineUsers = new Map();
+const newsCache = {
+    items: null,
+    fetchedAt: 0,
+    sourceSignature: null,
+};
+const NEWS_CACHE_TTL_MS = 15 * 60 * 1000;
 
 const addOnlineSocket = (userId, ws) => {
     const normalizedUserId = Number(userId);
@@ -112,6 +118,23 @@ wss.on('connection', (ws) => {
                 notifyClients({
                     type: 'USER_PRESENCE',
                     data: { userId: decoded.id, status: 'online', userIds: getOnlineUserIds() }
+                });
+                return;
+            }
+
+            if (payload.type?.startsWith('CALL_') && ws.userId) {
+                const targetIds = Array.isArray(payload.targetIds)
+                    ? payload.targetIds.map(Number).filter(Boolean)
+                    : [];
+                if (targetIds.length === 0) return;
+
+                notifyClients({
+                    type: payload.type,
+                    data: {
+                        ...payload.data,
+                        senderId: Number(ws.userId),
+                        targetIds,
+                    },
                 });
             }
         } catch (error) {
@@ -3301,17 +3324,49 @@ app.patch('/admin/posts/:id/status', verifyToken, verifyAdmin, async (req, res) 
     }
 });
 
-let cachedHackathons = null;
-let lastFetched = 0;
-const CACHE_DURATION = 30 * 60 * 1000;
+const hackathonsCache = {
+    items: [],
+    html: null,
+    css: [],
+    images: [],
+    fetchedAt: 0,
+    sourceSignature: null,
+};
+const HACKATHONS_CACHE_TTL_MS = 30 * 60 * 1000;
+
+const mergeHackathonItems = (previousItems, nextItems) => {
+    const previousByKey = new Map(
+        previousItems.map((item) => [item.link || String(item.id), item])
+    );
+
+    const merged = [];
+    for (const item of nextItems) {
+        const key = item.link || String(item.id);
+        const oldItem = previousByKey.get(key);
+        merged.push({
+            ...oldItem,
+            ...item,
+            cached_at: oldItem?.cached_at || new Date().toISOString(),
+        });
+        previousByKey.delete(key);
+    }
+
+    return [...merged, ...previousByKey.values()];
+};
 
 // Парсинг хакатанов с сайта hackathons.pro через парсинг HTML-кода
 app.get('/hackathons', async (req, res) => {
     const now = Date.now();
 
     // Проверяем: если кеш свежий, сразу отдаем его
-    if (cachedHackathons && (now - lastFetched) < CACHE_DURATION) {
-        return res.json(cachedHackathons);
+    if (hackathonsCache.items.length > 0 && (now - hackathonsCache.fetchedAt) < HACKATHONS_CACHE_TTL_MS) {
+        return res.json({
+            items: hackathonsCache.items,
+            html: hackathonsCache.html,
+            css: hackathonsCache.css,
+            images: hackathonsCache.images,
+            cached: true,
+        });
     }
 
     const browser = await puppeteer.launch({ headless: true });
@@ -3360,19 +3415,80 @@ app.get('/hackathons', async (req, res) => {
             return styles.map(style => style.href);
         });
 
+        const hackathonItems = await page.evaluate(() => {
+            const normalizeUrl = (url) => {
+                if (!url) return '#';
+                if (url.startsWith('//')) return `https:${url}`;
+                if (url.startsWith('/')) return `https://hackathons.pro${url}`;
+                return url;
+            };
+
+            return Array.from(document.querySelectorAll('.js-feed-post')).map((el, index) => {
+                const titleEl = el.querySelector('.js-feed-post-title');
+                const descEl = el.querySelector('.js-feed-post-descr');
+                const imageEl = el.querySelector('.t-feed__post-bgimg');
+                const linkEl = el.querySelector('.js-feed-post-title a');
+                const backgroundImage = imageEl ? window.getComputedStyle(imageEl).backgroundImage : '';
+                const image = backgroundImage && backgroundImage !== 'none'
+                    ? backgroundImage.replace(/^url\(["']?/, '').replace(/["']?\)$/, '')
+                    : '';
+
+                return {
+                    id: Number(el.getAttribute('data-post-uid')) || index + 1,
+                    title: titleEl?.textContent?.trim() || 'Без названия',
+                    description: descEl?.textContent?.trim() || 'Описание отсутствует',
+                    image: normalizeUrl(image),
+                    link: normalizeUrl(linkEl?.href || '#'),
+                };
+            }).filter((item) => item.title && item.link !== '#');
+        });
+
         if (!htmlContent) {
             res.status(404).json({ message: 'Блок с хакатонами не найден.' });
         } else {
-            const result = { html: htmlContent, css: cssContent, images: imageLinks };
+            const sourceSignature = crypto
+                .createHash('sha1')
+                .update(hackathonItems.map((item) => `${item.link}|${item.title}`).join('\n'))
+                .digest('hex');
 
-            // Сохраняем в кеш
-            cachedHackathons = result;
-            lastFetched = now;
+            if (hackathonsCache.items.length > 0 && hackathonsCache.sourceSignature === sourceSignature) {
+                hackathonsCache.fetchedAt = now;
+                return res.json({
+                    items: hackathonsCache.items,
+                    html: hackathonsCache.html,
+                    css: hackathonsCache.css,
+                    images: hackathonsCache.images,
+                    cached: true,
+                });
+            }
 
-            res.json(result);
+            hackathonsCache.items = mergeHackathonItems(hackathonsCache.items, hackathonItems);
+            hackathonsCache.html = htmlContent;
+            hackathonsCache.css = cssContent;
+            hackathonsCache.images = imageLinks;
+            hackathonsCache.fetchedAt = now;
+            hackathonsCache.sourceSignature = sourceSignature;
+
+            res.json({
+                items: hackathonsCache.items,
+                html: hackathonsCache.html,
+                css: hackathonsCache.css,
+                images: hackathonsCache.images,
+                cached: false,
+            });
         }
     } catch (err) {
         console.error('Ошибка при парсинге:', err);
+        if (hackathonsCache.items.length > 0) {
+            return res.json({
+                items: hackathonsCache.items,
+                html: hackathonsCache.html,
+                css: hackathonsCache.css,
+                images: hackathonsCache.images,
+                cached: true,
+                stale: true,
+            });
+        }
         res.status(500).json({ message: 'Ошибка при загрузке данных' });
     } finally {
         await browser.close();
@@ -3407,9 +3523,25 @@ app.get('/repositories/:github_username', verifyToken, async (req, res) => {
 // Получение всех новостей
 app.get("/news", async (req, res) => {
     try {
+        if (newsCache.items && Date.now() - newsCache.fetchedAt < NEWS_CACHE_TTL_MS) {
+            return res.status(200).json(newsCache.items);
+        }
+
         const { data: html } = await axios.get('https://tproger.ru/', {
             headers: { 'User-Agent': 'IT-BIRD news parser/1.0' },
         });
+
+        const sourceSignature = crypto.createHash('sha1')
+            .update(html.slice(0, 250000))
+            .digest('hex');
+
+        if (
+            newsCache.items &&
+            newsCache.sourceSignature === sourceSignature &&
+            Date.now() - newsCache.fetchedAt < NEWS_CACHE_TTL_MS
+        ) {
+            return res.status(200).json(newsCache.items);
+        }
 
         const seen = new Set();
         const news = [];
@@ -3487,6 +3619,13 @@ app.get("/news", async (req, res) => {
         }));
 
         if (news.length > 0) {
+            const previousByLink = new Map((newsCache.items || []).map((item) => [item.link, item.created_at]));
+            news.forEach((item) => {
+                item.created_at = previousByLink.get(item.link) || item.created_at;
+            });
+            newsCache.items = news;
+            newsCache.fetchedAt = Date.now();
+            newsCache.sourceSignature = sourceSignature;
             return res.status(200).json(news);
         }
 
@@ -3844,6 +3983,31 @@ app.put("/forums/:id/status", verifyToken, async (req, res) => {
         res.status(200).json(updatedQuestion[0]);
     } catch (error) {
         console.error("Ошибка при обновлении статуса:", error);
+        res.status(500).json({ message: "Ошибка сервера" });
+    }
+});
+
+app.delete("/forums/:id", verifyToken, verifyAdmin, async (req, res) => {
+    const { id } = req.params;
+
+    try {
+        const [forumRows] = await db.query('SELECT id FROM forums WHERE id = ?', [id]);
+        if (forumRows.length === 0) {
+            return res.status(404).json({ message: "Вопрос не найден." });
+        }
+
+        const [answers] = await db.query('SELECT id FROM forum_answers WHERE forum_id = ?', [id]);
+        const answerIds = answers.map((answer) => answer.id);
+        if (answerIds.length > 0) {
+            await db.query('DELETE FROM forum_answer_comments WHERE answer_id IN (?)', [answerIds]);
+        }
+
+        await db.query('DELETE FROM forum_answers WHERE forum_id = ?', [id]);
+        await db.query('DELETE FROM forums WHERE id = ?', [id]);
+
+        res.json({ message: "Вопрос удален" });
+    } catch (error) {
+        console.error("Ошибка удаления вопроса форума:", error);
         res.status(500).json({ message: "Ошибка сервера" });
     }
 });
