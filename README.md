@@ -11,6 +11,7 @@ Users can communicate in real time, participate in forums, create posts, use an 
 Personal chats
 Group chats
 Real-time messaging using WebSockets
+User activity status system (Online/Offline)
 Voice messages
 Emoji support
 File attachments
@@ -176,6 +177,7 @@ SocialBIRD — это современная социальная платфор
 Личные чаты
 Групповые чаты
 Обмен сообщениями в реальном времени с использованием WebSockets
+Система активности пользователей (Online/Offline статус)
 Голосовые сообщения
 Поддержка эмодзи
 Отправка файлов
