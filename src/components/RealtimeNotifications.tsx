@@ -30,6 +30,7 @@ type IncomingCall = {
   candidate?: RTCIceCandidateInit;
   callKind?: "voice" | "video";
   callerName?: string;
+  isRenegotiation?: boolean;
   participants?: CallParticipant[];
 };
 
@@ -194,6 +195,12 @@ const RealtimeNotifications = () => {
   };
 
   const toggleMic = () => {
+    if (activeCall?.senderId === 0) {
+      (window as typeof window & { __itbirdActiveCallToggleMic?: () => void }).__itbirdActiveCallToggleMic?.();
+      setMicEnabled((current) => !current);
+      return;
+    }
+
     const next = !micEnabled;
     localStreamRef.current?.getAudioTracks().forEach((track) => {
       track.enabled = next;
@@ -202,6 +209,12 @@ const RealtimeNotifications = () => {
   };
 
   const toggleSound = () => {
+    if (activeCall?.senderId === 0) {
+      (window as typeof window & { __itbirdActiveCallToggleSound?: () => void }).__itbirdActiveCallToggleSound?.();
+      setSoundEnabled((current) => !current);
+      return;
+    }
+
     const next = !soundEnabled;
     remoteAudioRef.current?.querySelectorAll<HTMLMediaElement>("audio, video").forEach((media) => {
       media.muted = !next;
@@ -213,7 +226,7 @@ const RealtimeNotifications = () => {
     if (!activeCall?.senderId || !peerRef.current) return;
     const offer = await peerRef.current.createOffer();
     await peerRef.current.setLocalDescription(offer);
-    sendCallSignal("CALL_OFFER", [activeCall.senderId], { ...activeCall, description: offer });
+    sendCallSignal("CALL_OFFER", [activeCall.senderId], { ...activeCall, description: offer, isRenegotiation: true });
   };
 
   const toggleScreenShare = async () => {
@@ -243,6 +256,13 @@ const RealtimeNotifications = () => {
       await renegotiateActivePeer();
     } catch {
       toast({ title: "Демонстрация экрана", description: "Не удалось начать демонстрацию экрана", variant: "destructive" });
+    }
+  };
+
+  const toggleVideo = () => {
+    if (activeCall?.senderId === 0) {
+      (window as typeof window & { __itbirdActiveCallToggleVideo?: () => void }).__itbirdActiveCallToggleVideo?.();
+      setActiveCall((current) => current ? { ...current, callKind: "video" } : current);
     }
   };
 
@@ -440,6 +460,8 @@ const RealtimeNotifications = () => {
         const call = notification.data as IncomingCall;
         if (call.senderId === currentUserId) return;
         if (!call.targetIds?.includes(currentUserId)) return;
+        const active = activeCallRef.current;
+        if (active && String(active.chatId) === String(call.chatId) && active.mode === call.mode) return;
         setOfferReady(false);
         setIncomingCall(call);
         startRingtone();
@@ -449,7 +471,9 @@ const RealtimeNotifications = () => {
         const call = notification.data as IncomingCall;
         if (call.senderId === currentUserId) return;
         if (!call.targetIds?.includes(currentUserId)) return;
-        if (activeCallRef.current && peerRef.current && call.description) {
+        const active = activeCallRef.current;
+        const sameActiveCall = active && String(active.chatId) === String(call.chatId) && active.mode === call.mode;
+        if (sameActiveCall && peerRef.current && call.description) {
           peerRef.current.setRemoteDescription(new RTCSessionDescription(call.description))
             .then(() => peerRef.current?.createAnswer())
             .then(async (answer) => {
@@ -460,6 +484,7 @@ const RealtimeNotifications = () => {
             .catch(() => undefined);
           return;
         }
+        if (call.isRenegotiation || sameActiveCall) return;
         pendingOfferRef.current = call;
         setOfferReady(true);
         setIncomingCall((prev) => ({ ...(prev || call), ...call }));
@@ -587,7 +612,7 @@ const RealtimeNotifications = () => {
             </div>
 
             <div className="flex overflow-hidden rounded-lg border border-white/10 bg-white/10">
-              <Button variant="ghost" size="sm" className="rounded-none text-white hover:bg-white/15 hover:text-white">
+              <Button variant="ghost" size="sm" onClick={toggleVideo} className="rounded-none text-white hover:bg-white/15 hover:text-white">
                 <Video className={`h-4 w-4 ${activeCall.callKind === "video" ? "" : "text-white/35"}`} />
               </Button>
               <Button variant="ghost" size="sm" className="rounded-none px-2 text-white hover:bg-white/15 hover:text-white">

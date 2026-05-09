@@ -42,6 +42,53 @@ const iceServers: RTCConfiguration = {
   iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
 };
 
+type ActiveCallWindow = typeof window & {
+  __itbirdActiveCallEnd?: () => void;
+  __itbirdActiveCallToggleMic?: () => void;
+  __itbirdActiveCallToggleSound?: () => void;
+  __itbirdActiveCallToggleVideo?: () => void;
+  __itbirdActiveCallToggleScreen?: () => void;
+};
+
+const getGlobalMediaRoot = () => {
+  let root = document.getElementById("itbird-global-call-media") as HTMLDivElement | null;
+  if (!root) {
+    root = document.createElement("div");
+    root.id = "itbird-global-call-media";
+    root.className = "fixed bottom-28 right-6 z-[60] flex max-w-[calc(100vw-32px)] flex-wrap justify-end gap-2";
+    document.body.appendChild(root);
+  }
+  return root;
+};
+
+const attachMediaElement = (container: HTMLElement, peerId: number, stream: MediaStream, muted: boolean) => {
+  const hasVideo = stream.getVideoTracks().length > 0;
+  const selector = hasVideo ? `video[data-peer-id="${peerId}"]` : `audio[data-peer-id="${peerId}"]`;
+  let media = container.querySelector<HTMLMediaElement>(selector);
+
+  if (!media) {
+    media = document.createElement(hasVideo ? "video" : "audio");
+    media.dataset.peerId = String(peerId);
+    media.autoplay = true;
+    if (hasVideo) {
+      (media as HTMLVideoElement).playsInline = true;
+      media.className = "h-28 w-44 rounded-lg bg-black object-cover shadow-xl";
+    } else {
+      media.className = "hidden";
+    }
+    container.appendChild(media);
+  }
+
+  media.muted = muted;
+  media.srcObject = stream;
+  const outputId = readSettings().audioOutputDeviceId;
+  if (outputId && "setSinkId" in media) {
+    (media as HTMLMediaElement & { setSinkId: (sinkId: string) => Promise<void> })
+      .setSinkId(outputId)
+      .catch(() => undefined);
+  }
+};
+
 const getMediaErrorMessage = (error: unknown) => {
   if (!window.isSecureContext && !["localhost", "127.0.0.1", "::1"].includes(window.location.hostname)) {
     return "На телефоне браузер запрашивает микрофон и камеру только через HTTPS или localhost. Откройте сайт по HTTPS, иначе окно разрешения не появится.";
@@ -203,33 +250,10 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
   };
 
   const attachRemoteStream = (peerId: number, stream: MediaStream) => {
-    if (!remoteMediaRef.current) return;
-
-    const hasVideo = stream.getVideoTracks().length > 0;
-    const selector = hasVideo ? `video[data-peer-id="${peerId}"]` : `audio[data-peer-id="${peerId}"]`;
-    let media = remoteMediaRef.current.querySelector<HTMLMediaElement>(selector);
-
-    if (!media) {
-      media = document.createElement(hasVideo ? "video" : "audio");
-      media.dataset.peerId = String(peerId);
-      media.autoplay = true;
-      if (hasVideo) {
-        (media as HTMLVideoElement).playsInline = true;
-        media.className = "h-28 w-44 rounded-lg bg-black object-cover";
-      } else {
-        media.className = "hidden";
-      }
-      remoteMediaRef.current.appendChild(media);
+    if (remoteMediaRef.current) {
+      attachMediaElement(remoteMediaRef.current, peerId, stream, !soundEnabled);
     }
-
-    media.muted = !soundEnabled;
-    media.srcObject = stream;
-    const outputId = readSettings().audioOutputDeviceId;
-    if (outputId && "setSinkId" in media) {
-      (media as HTMLMediaElement & { setSinkId: (sinkId: string) => Promise<void> })
-        .setSinkId(outputId)
-        .catch(() => undefined);
-    }
+    attachMediaElement(getGlobalMediaRoot(), peerId, stream, !soundEnabled);
   };
 
   const createPeer = async (peerId: number, kind: CallKind) => {
@@ -274,12 +298,12 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
     }
   };
 
-  const renegotiate = async (targetId: number) => {
+  const renegotiate = async (targetId: number, nextKind = callKind) => {
     const peer = peersRef.current[targetId];
     if (!peer) return;
     const offer = await peer.createOffer();
     await peer.setLocalDescription(offer);
-    sendSignal("CALL_OFFER", [targetId], { description: offer, callKind });
+    sendSignal("CALL_OFFER", [targetId], { description: offer, callKind: nextKind, isRenegotiation: true });
   };
 
   const toggleMic = () => {
@@ -295,15 +319,54 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
     remoteMediaRef.current?.querySelectorAll<HTMLMediaElement>("audio, video").forEach((media) => {
       media.muted = !next;
     });
+    getGlobalMediaRoot().querySelectorAll<HTMLMediaElement>("audio, video").forEach((media) => {
+      media.muted = !next;
+    });
     setSoundEnabled(next);
   };
 
-  const toggleVideo = () => {
+  const addCameraTrack = async () => {
+    const settings = readSettings();
+    const cameraStream = await navigator.mediaDevices.getUserMedia({
+      video: settings.cameraDeviceId ? { deviceId: { exact: settings.cameraDeviceId } } : true,
+      audio: false,
+    });
+    const [videoTrack] = cameraStream.getVideoTracks();
+    if (!videoTrack) return;
+
+    if (!localStreamRef.current) {
+      localStreamRef.current = new MediaStream();
+    }
+
+    localStreamRef.current.addTrack(videoTrack);
+    Object.values(peersRef.current).forEach((peer) => peer.addTrack(videoTrack, localStreamRef.current as MediaStream));
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = localStreamRef.current;
+    }
+  };
+
+  const toggleVideo = async () => {
     const next = !videoEnabled;
+    if (next && localStreamRef.current?.getVideoTracks().length === 0) {
+      try {
+        await addCameraTrack();
+        setCallKind("video");
+        setVideoEnabled(true);
+        await Promise.all(Object.keys(peersRef.current).map((id) => renegotiate(Number(id), "video")));
+      } catch (error) {
+        toast({ title: "Ошибка звонка", description: getMediaErrorMessage(error), variant: "destructive" });
+      }
+      return;
+    }
+
     localStreamRef.current?.getVideoTracks().forEach((track) => {
       track.enabled = next;
     });
     setVideoEnabled(next);
+    if (next) {
+      setCallKind("video");
+      await Promise.all(Object.keys(peersRef.current).map((id) => renegotiate(Number(id), "video")));
+    }
   };
 
   const toggleScreenShare = async () => {
@@ -367,11 +430,11 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
 
   const endCall = () => {
     liveCallRef.current = false;
-    const windowWithCall = window as typeof window & {
-      __itbirdActiveCallEnd?: () => void;
-      __itbirdActiveCallToggleScreen?: () => void;
-    };
+    const windowWithCall = window as ActiveCallWindow;
     if (windowWithCall.__itbirdActiveCallEnd === endCall) delete windowWithCall.__itbirdActiveCallEnd;
+    delete windowWithCall.__itbirdActiveCallToggleMic;
+    delete windowWithCall.__itbirdActiveCallToggleSound;
+    delete windowWithCall.__itbirdActiveCallToggleVideo;
     delete windowWithCall.__itbirdActiveCallToggleScreen;
     const targetIds = Object.keys(peersRef.current).map(Number);
     if (targetIds.length > 0) sendSignal("CALL_HANGUP", targetIds, {});
@@ -382,6 +445,7 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
     localStreamRef.current = null;
     screenStreamRef.current = null;
     remoteMediaRef.current?.replaceChildren();
+    document.getElementById("itbird-global-call-media")?.replaceChildren();
     setIsCalling(false);
     setVideoEnabled(false);
     setScreenEnabled(false);
@@ -390,9 +454,14 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
 
   useEffect(() => {
     if (!isCalling) return;
-    const windowWithCall = window as typeof window & { __itbirdActiveCallEnd?: () => void };
+    const windowWithCall = window as ActiveCallWindow;
     windowWithCall.__itbirdActiveCallEnd = endCall;
-    (windowWithCall as typeof windowWithCall & { __itbirdActiveCallToggleScreen?: () => void }).__itbirdActiveCallToggleScreen = () => {
+    windowWithCall.__itbirdActiveCallToggleMic = toggleMic;
+    windowWithCall.__itbirdActiveCallToggleSound = toggleSound;
+    windowWithCall.__itbirdActiveCallToggleVideo = () => {
+      void toggleVideo();
+    };
+    windowWithCall.__itbirdActiveCallToggleScreen = () => {
       void toggleScreenShare();
     };
     window.dispatchEvent(new CustomEvent("itbird-call-active", {
@@ -401,10 +470,13 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
     return () => {
       if (!isCallingRef.current && windowWithCall.__itbirdActiveCallEnd === endCall) {
         delete windowWithCall.__itbirdActiveCallEnd;
-        delete (windowWithCall as typeof windowWithCall & { __itbirdActiveCallToggleScreen?: () => void }).__itbirdActiveCallToggleScreen;
+        delete windowWithCall.__itbirdActiveCallToggleMic;
+        delete windowWithCall.__itbirdActiveCallToggleSound;
+        delete windowWithCall.__itbirdActiveCallToggleVideo;
+        delete windowWithCall.__itbirdActiveCallToggleScreen;
       }
     };
-  }, [isCalling, chatId, mode, title, callKind, callTargets.join(","), visibleCallParticipants.length]);
+  }, [isCalling, chatId, mode, title, callKind, callTargets.join(","), visibleCallParticipants.length, micEnabled, soundEnabled, videoEnabled, screenEnabled]);
 
   useEffect(() => {
     if (!token || !currentUserId) return;
@@ -429,6 +501,22 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
       if (payload.type === "CALL_ANSWER") {
         const peer = peersRef.current[data.senderId];
         if (peer) await peer.setRemoteDescription(new RTCSessionDescription(data.description));
+      }
+
+      if (payload.type === "CALL_OFFER") {
+        const peer = peersRef.current[data.senderId];
+        if (peer && data.description) {
+          liveCallRef.current = true;
+          setIsCalling(true);
+          await peer.setRemoteDescription(new RTCSessionDescription(data.description));
+          const answer = await peer.createAnswer();
+          await peer.setLocalDescription(answer);
+          sendSignal("CALL_ANSWER", [data.senderId], {
+            description: answer,
+            callKind: data.callKind || callKind,
+            isRenegotiation: true,
+          });
+        }
       }
 
       if (payload.type === "CALL_ICE") {
