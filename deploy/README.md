@@ -78,6 +78,8 @@ The runner itself is not exposed over TCP. Only the SocialBIRD backend group can
 
 Default abuse controls are ten executions per account per minute, one active execution per account, two concurrent containers globally and a bounded queue. These values can be adjusted through `/etc/socialbird/backend.env` and the systemd runner unit.
 
+The CI smoke suite executes all nine supported language modes and also verifies blocked network access, a read-only root filesystem, absence of API secrets and forced termination of infinite loops.
+
 ## Important files on the VPS
 
 - application: `/opt/socialbird/current`
