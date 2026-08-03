@@ -1,4 +1,16 @@
 {
+  "name": "socialbird-backend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "prepare:production": "node ../deploy/harden-source.mjs",
+    "start": "node server.production.js",
+    "start:development": "node server.js",
+    "check": "node --check server.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
   "dependencies": {
     "@types/simple-peer": "^9.11.8",
     "axios": "^1.7.8",
