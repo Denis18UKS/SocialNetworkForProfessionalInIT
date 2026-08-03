@@ -59,11 +59,14 @@ Express API (socialbird user)
     -> one disposable Docker container per execution
 ```
 
+The runner service code is copied to the root-owned `/usr/local/lib/socialbird-compiler-runner` directory. The application account cannot modify this code and is not a member of the Docker group.
+
 The runner supports Java, C#, C++17, Lua, Python, PHP, JavaScript, Node.js and React/JSX. Each execution uses:
 
 - `--network none`;
 - a read-only root filesystem;
 - temporary in-memory `/workspace` and `/tmp` filesystems;
+- executable permission only in the disposable `/workspace`, while `/tmp` remains `noexec`;
 - a non-root UID/GID;
 - all Linux capabilities dropped;
 - Docker's default seccomp profile and `no-new-privileges`;
@@ -82,6 +85,7 @@ Default abuse controls are ten executions per account per minute, one active exe
 - frontend build variables: `/opt/socialbird/current/.env.production`
 - Nginx: `/etc/nginx/sites-available/socialbird`
 - Coturn: `/etc/turnserver.conf`
+- immutable compiler runner: `/usr/local/lib/socialbird-compiler-runner/server.mjs`
 - compiler runner unit: `/etc/systemd/system/socialbird-compiler-runner.service`
 - compiler socket: `/run/socialbird-compiler/runner.sock`
 - compiler image: `socialbird/compiler-sandbox:latest`
