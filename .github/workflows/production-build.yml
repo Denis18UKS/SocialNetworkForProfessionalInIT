@@ -19,7 +19,7 @@ concurrency:
 jobs:
   harden-and-build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Checkout production branch
@@ -36,13 +36,20 @@ jobs:
             package-lock.json
             backend/package-lock.json
 
-      - name: Apply source hardening
-        run: node deploy/harden-source.mjs --in-place
+      - name: Apply production and compiler hardening
+        run: |
+          node deploy/harden-source.mjs --in-place
+          node deploy/enable-sandbox-compiler.mjs --in-place
 
-      - name: Check generated backend syntax
+      - name: Check generated backend and runner syntax
         run: |
           node --check backend/server.js
+          node --check backend/compiler-client.js
+          node --check deploy/compiler-runner/server.mjs
+          node --check deploy/compiler-sandbox/runner.mjs
+          node --check deploy/compiler-sandbox/smoke-test.mjs
           node deploy/harden-source.mjs
+          node deploy/enable-sandbox-compiler.mjs
           node --check backend/server.production.js
 
       - name: Install frontend dependencies
@@ -65,10 +72,16 @@ jobs:
         env:
           PUPPETEER_SKIP_DOWNLOAD: "true"
 
+      - name: Build isolated compiler image
+        run: docker build --pull --tag socialbird/compiler-sandbox:latest deploy/compiler-sandbox
+
+      - name: Smoke-test all compiler languages
+        run: node deploy/compiler-sandbox/smoke-test.mjs
+
       - name: Validate repository changes
         run: git diff --check
 
-      - name: Commit hardened source files
+      - name: Commit generated hardened source
         if: github.event_name == 'push'
         run: |
           git config user.name "github-actions[bot]"
