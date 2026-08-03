@@ -1,0 +1,80 @@
+name: Production hardening and build
+
+on:
+  push:
+    branches:
+      - deploy/socialbird-vps-production
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: socialbird-production-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  harden-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout production branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            backend/package-lock.json
+
+      - name: Apply source hardening
+        run: node deploy/harden-source.mjs --in-place
+
+      - name: Check generated backend syntax
+        run: |
+          node --check backend/server.js
+          node deploy/harden-source.mjs
+          node --check backend/server.production.js
+
+      - name: Install frontend dependencies
+        run: npm ci
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: "true"
+
+      - name: Build frontend
+        run: npm run build
+        env:
+          VITE_API_URL: https://api.31.207.74.138.nip.io
+          VITE_STUN_URLS: stun:stun.l.google.com:19302
+          VITE_TURN_URLS: turn:api.31.207.74.138.nip.io:3478?transport=udp,turn:api.31.207.74.138.nip.io:3478?transport=tcp
+          VITE_TURN_USERNAME: socialbird
+          VITE_TURN_CREDENTIAL: ci-placeholder-only
+
+      - name: Install backend dependencies
+        run: npm ci
+        working-directory: backend
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: "true"
+
+      - name: Validate repository changes
+        run: git diff --check
+
+      - name: Commit hardened source files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/server.js \
+            src/components/RealtimeNotifications.tsx \
+            src/components/VoiceCallControls.tsx \
+            src/pages/Chats.tsx \
+            src/pages/GroupChats.tsx
+          if ! git diff --cached --quiet; then
+            git commit -m "Apply generated production hardening"
+            git push origin HEAD:${GITHUB_REF_NAME}
+          fi
