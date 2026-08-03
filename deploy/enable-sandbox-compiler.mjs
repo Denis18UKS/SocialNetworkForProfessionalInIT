@@ -48,11 +48,21 @@ if (!source.includes('PRODUCTION_HARDENING: sandboxed-compiler-route')) {
   );
 }
 
+// The generic hardener may add a temporary safety guard before this script runs.
+// Once the isolated route exists, retain only its structured ENABLE_COMPILER check.
+source = source.replace(
+  /\r?\n\s*\/\/ PRODUCTION_HARDENING: compiler-disabled-by-default\r?\n\s*if \(String\(process\.env\.ENABLE_COMPILER \|\| 'false'\)\.toLowerCase\(\) !== 'true'\) \{\r?\n\s*return res\.status\(503\)\.json\(\{\r?\n\s*message: 'Онлайн-компилятор временно отключен до запуска изолированной песочницы\.',\r?\n\s*\}\);\r?\n\s*\}(?=\r?\n\s*if \(String\(process\.env\.ENABLE_COMPILER)/,
+  '',
+);
+
 if (source.includes("runProcess('python'")) {
   throw new Error('Legacy host-side compiler implementation is still reachable in the backend source.');
 }
 if (!source.includes("runSandboxedCompilerJob")) {
   throw new Error('Sandbox compiler client was not installed.');
+}
+if (source.includes('PRODUCTION_HARDENING: compiler-disabled-by-default')) {
+  throw new Error('Legacy compiler guard remained after installing the isolated route.');
 }
 
 fs.writeFileSync(targetPath, source, 'utf8');
