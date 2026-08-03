@@ -44,6 +44,7 @@ import { format } from "date-fns";
 import { ru } from "date-fns/locale";
 import { motion, AnimatePresence } from "framer-motion";
 import { getWsUrl, readSettings } from "@/lib/settings";
+import { createReconnectingWebSocket } from "@/lib/reconnecting-websocket";
 import { readOnlineUserIds, subscribeOnlineUserIds, writeOnlineUserIds } from "@/lib/realtime";
 import VoiceCallControls from "@/components/VoiceCallControls";
 import VoiceMessageBubble from "@/components/VoiceMessageBubble";
@@ -621,7 +622,7 @@ const GroupChats = () => {
     }, [chatId, selectedChat, fetchChatMembers]);
 
     useEffect(() => {
-        const socket = new WebSocket(getWsUrl());
+        const socket = createReconnectingWebSocket(getWsUrl());
 
         socket.onopen = () => {
             const token = localStorage.getItem("token");

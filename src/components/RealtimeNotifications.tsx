@@ -7,6 +7,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { ToastAction } from "@/components/ui/toast";
 import { useToast } from "@/hooks/use-toast";
 import { getWsUrl, readSettings } from "@/lib/settings";
+import { getIceServers } from "@/lib/webrtc";
+import { createReconnectingWebSocket } from "@/lib/reconnecting-websocket";
 import { writeOnlineUserIds } from "@/lib/realtime";
 import { useAuth } from "@/pages/AuthContext";
 
@@ -313,7 +315,7 @@ const RealtimeNotifications = () => {
       });
       localStreamRef.current = stream;
 
-      const peer = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+      const peer = new RTCPeerConnection({ iceServers: getIceServers() });
       peerRef.current = peer;
       stream.getTracks().forEach((track) => peer.addTrack(track, stream));
       peer.ontrack = (event) => {
@@ -371,7 +373,7 @@ const RealtimeNotifications = () => {
       return;
     }
 
-    const socket = new WebSocket(getWsUrl());
+    const socket = createReconnectingWebSocket(getWsUrl());
     socketRef.current = socket;
     socket.onopen = () => {
       socket.send(JSON.stringify({ type: "AUTH", token }));

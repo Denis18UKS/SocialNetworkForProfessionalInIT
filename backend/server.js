@@ -41,7 +41,11 @@ const storage = multer.diskStorage({
         cb(null, destinationPath);
     },
     filename: (req, file, cb) => {
-        cb(null, Date.now() + '-' + file.originalname);
+        const safeOriginalName = path
+            .basename(file.originalname)
+            .replace(/[^\p{L}\p{N}._ -]/gu, '_')
+            .slice(0, 180);
+        cb(null, Date.now() + '-' + safeOriginalName);
     }
 });
 
@@ -49,31 +53,75 @@ const storage = multer.diskStorage({
 // Настройка почты
 const nodemailer = require('nodemailer');
 
-// Настройка транспорта для Mail.ru
-const transporter = nodemailer.createTransport({
-    host: 'smtp.mail.ru',
-    port: 465, // Используем 465 порт для SSL
-    secure: true, // true для 465 порта, false для других портов
-    auth: {
-        user: 'den4ik200518@mail.ru',
-        pass: '8Jp4n7GQrPye2gt25j9g'
-    }
-});
+// PRODUCTION_HARDENING: smtp-from-environment
+const smtpConfigured = Boolean(
+    process.env.SMTP_HOST &&
+    process.env.SMTP_PORT &&
+    process.env.SMTP_USER &&
+    process.env.SMTP_PASSWORD
+);
 
-// Проверка подключения SMTP
-transporter.verify((error, success) => {
-    if (error) {
-        console.error('SMTP connection error:', error);
-    } else {
-        console.log('SMTP server is ready to take our messages');
-    }
-});
+const transporter = smtpConfigured
+    ? nodemailer.createTransport({
+        host: process.env.SMTP_HOST,
+        port: Number(process.env.SMTP_PORT),
+        secure: String(process.env.SMTP_SECURE || 'true').toLowerCase() === 'true',
+        auth: {
+            user: process.env.SMTP_USER,
+            pass: process.env.SMTP_PASSWORD,
+        },
+    })
+    : null;
 
-const upload = multer({ storage });
+if (transporter) {
+    transporter.verify((error) => {
+        if (error) {
+            console.error('SMTP connection error:', error.message);
+        } else {
+            console.log('SMTP server is ready');
+        }
+    });
+} else {
+    console.warn('SMTP is disabled: configure SMTP_* variables to enable email notifications');
+}
+
+// PRODUCTION_HARDENING: upload-limits
+const upload = multer({
+    storage,
+    limits: {
+        fileSize: Number(process.env.MAX_UPLOAD_BYTES || 25 * 1024 * 1024),
+        files: 1,
+    },
+});
 
 const WebSocket = require('ws');
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocket.Server({
+    server,
+    maxPayload: Number(process.env.WS_MAX_PAYLOAD_BYTES || 1024 * 1024),
+});
+
+// PRODUCTION_HARDENING: websocket-heartbeat
+wss.on('connection', (socket) => {
+    socket.isAlive = true;
+    socket.on('pong', () => {
+        socket.isAlive = true;
+    });
+});
+
+const websocketHeartbeat = setInterval(() => {
+    wss.clients.forEach((socket) => {
+        if (socket.isAlive === false) {
+            socket.terminate();
+            return;
+        }
+
+        socket.isAlive = false;
+        socket.ping();
+    });
+}, Number(process.env.WS_HEARTBEAT_MS || 30000));
+
+server.on('close', () => clearInterval(websocketHeartbeat));
 const onlineUsers = new Map();
 const newsCache = {
     items: null,
@@ -155,11 +203,25 @@ wss.on('connection', (ws) => {
 });
 
 // WebSocket уведомление
+// PRODUCTION_HARDENING: authenticated-targeted-notifications
 const notifyClients = (notification) => {
+    const data = notification?.data || {};
+    const targetValues = [
+        ...(Array.isArray(data.targetIds) ? data.targetIds : []),
+        ...(Array.isArray(data.recipientIds) ? data.recipientIds : []),
+        ...(Array.isArray(data.memberIds) ? data.memberIds : []),
+        data.recipientId,
+        data.blockerId,
+        data.blockedId,
+    ];
+    const targetIds = new Set(targetValues.map(Number).filter(Number.isFinite));
+    const hasExplicitTargets = targetIds.size > 0;
+    const serializedNotification = JSON.stringify(notification);
+
     wss.clients.forEach((client) => {
-        if (client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify(notification));
-        }
+        if (client.readyState !== WebSocket.OPEN || !client.userId) return;
+        if (hasExplicitTargets && !targetIds.has(Number(client.userId))) return;
+        client.send(serializedNotification);
     });
 };
 
@@ -217,9 +279,10 @@ const sendOfflineEmailNotification = async (userId, subject, text) => {
     try {
         const [users] = await db.query('SELECT email, username FROM users WHERE id = ?', [userId]);
         if (users.length === 0 || !users[0].email) return;
+        if (!transporter) return;
 
         await transporter.sendMail({
-            from: '"IT-BIRD" <den4ik200518@mail.ru>',
+            from: process.env.SMTP_FROM || process.env.SMTP_USER,
             to: users[0].email,
             subject,
             text: `Здравствуйте, ${users[0].username}!\n\n${text}\n\nIT-BIRD`,
@@ -295,23 +358,40 @@ app.use((err, req, res, next) => {
     res.status(500).json({ message: 'Ошибка сервера' });
 });
 
-// Разрешаем CORS для всех доменов
+// PRODUCTION_HARDENING: restricted-cors
+const allowedOrigins = String(process.env.FRONTEND_URLS || process.env.FRONTEND_URL || '')
+    .split(',')
+    .map((origin) => origin.trim().replace(/\/$/, ''))
+    .filter(Boolean);
+
 app.use(cors({
-    origin: '*',  // Разрешаем доступ с любых источников
-    optionsSuccessStatus: 200,  // Для старых браузеров
-    methods: 'GET,POST, PATCH, PUT,DELETE',  // Разрешенные методы
-    allowedHeaders: 'Content-Type,Authorization',
-    credentials: true, // Разрешенные заголовки
+    origin(origin, callback) {
+        if (!origin || allowedOrigins.includes(origin.replace(/\/$/, ''))) {
+            callback(null, true);
+            return;
+        }
+        callback(new Error('Origin is not allowed by CORS'));
+    },
+    optionsSuccessStatus: 204,
+    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: false,
 }));
 
-app.use(express.json()); // Для обработки JSON-запросов
+app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '2mb' })); // PRODUCTION_HARDENING: request-limit
 
 // Подключение к базе данных с использованием промисов
+// PRODUCTION_HARDENING: database-pool
 const db = mysql.createPool({
-    host: process.env.DB_HOST,
+    host: process.env.DB_HOST || '127.0.0.1',
+    port: Number(process.env.DB_PORT || 3306),
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME,
+    waitForConnections: true,
+    connectionLimit: Number(process.env.DB_CONNECTION_LIMIT || 10),
+    queueLimit: 0,
+    charset: 'utf8mb4',
 });
 
 const addColumnIfMissing = async (table, column, definition) => {
@@ -464,7 +544,10 @@ const ensureSchema = async () => {
     )`);
 };
 
-ensureSchema();
+ensureSchema().catch((error) => {
+    console.error('Database schema initialization failed:', error);
+    process.exitCode = 1;
+});
 
 const githubHeaders = process.env.GITHUB_PERSONAL_ACCESS_TOKEN
     ? { Authorization: `token ${process.env.GITHUB_PERSONAL_ACCESS_TOKEN}` }
@@ -1063,6 +1146,12 @@ const verifyAdmin = (req, res, next) => {
 };
 
 app.post('/compiler/run', verifyToken, async (req, res) => {
+    // PRODUCTION_HARDENING: compiler-disabled-by-default
+    if (String(process.env.ENABLE_COMPILER || 'false').toLowerCase() !== 'true') {
+        return res.status(503).json({
+            message: 'Онлайн-компилятор временно отключен до запуска изолированной песочницы.',
+        });
+    }
     const { language, code } = req.body;
 
     try {
@@ -3380,7 +3469,10 @@ app.get('/hackathons', async (req, res) => {
         });
     }
 
-    const browser = await puppeteer.launch({ headless: true });
+    const browser = await puppeteer.launch({
+        headless: true,
+        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    });
     const page = await browser.newPage();
 
     try {
@@ -4083,6 +4175,9 @@ app.post("/answers/:answerId/comments", verifyToken, async (req, res) => {
 });
 
 // Старт сервера
-server.listen(5000, () => {
-    console.log('Server is running on port 5000');
+// PRODUCTION_HARDENING: configurable-listen-address
+const port = Number(process.env.PORT || 5000);
+const host = process.env.HOST || '127.0.0.1';
+server.listen(port, host, () => {
+    console.log(`Server is running on http://${host}:${port}`);
 });
