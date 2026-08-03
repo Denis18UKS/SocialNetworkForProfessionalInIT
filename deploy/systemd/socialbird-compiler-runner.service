@@ -8,7 +8,7 @@ Type=simple
 User=socialbird-compiler
 Group=socialbird
 SupplementaryGroups=docker
-WorkingDirectory=/opt/socialbird/current
+WorkingDirectory=/usr/local/lib/socialbird-compiler-runner
 Environment=NODE_ENV=production
 Environment=HOME=/run/socialbird-compiler
 Environment=DOCKER_CONFIG=/run/socialbird-compiler/docker
@@ -22,7 +22,7 @@ Environment=COMPILER_MEMORY_LIMIT=256m
 Environment=COMPILER_CPU_LIMIT=0.75
 Environment=COMPILER_PIDS_LIMIT=64
 Environment=COMPILER_MAX_OUTPUT_BYTES=131072
-ExecStart=/usr/bin/node /opt/socialbird/current/deploy/compiler-runner/server.mjs
+ExecStart=/usr/bin/node /usr/local/lib/socialbird-compiler-runner/server.mjs
 Restart=always
 RestartSec=2
 RuntimeDirectory=socialbird-compiler
