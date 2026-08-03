@@ -125,6 +125,57 @@ if (/pass:\s*['"][^'"]+['"]/.test(source)) {
 
 fs.writeFileSync(outputPath, source, "utf8");
 
+const frontendFiles = [
+  "src/components/RealtimeNotifications.tsx",
+  "src/components/VoiceCallControls.tsx",
+  "src/pages/Chats.tsx",
+  "src/pages/GroupChats.tsx",
+];
+
+for (const relativePath of frontendFiles) {
+  const filePath = path.join(repositoryRoot, relativePath);
+  if (!fs.existsSync(filePath)) continue;
+
+  let frontendSource = fs.readFileSync(filePath, "utf8");
+  const originalFrontendSource = frontendSource;
+
+  if (frontendSource.includes("new WebSocket(getWsUrl())")) {
+    if (!frontendSource.includes("createReconnectingWebSocket")) {
+      frontendSource = frontendSource.replace(
+        /(import\s+\{[^}]*\bgetWsUrl\b[^}]*\}\s+from\s+["']@\/lib\/settings["'];\r?\n)/,
+        `$1import { createReconnectingWebSocket } from "@/lib/reconnecting-websocket";\n`
+      );
+    }
+    frontendSource = frontendSource
+      .split("new WebSocket(getWsUrl())")
+      .join("createReconnectingWebSocket(getWsUrl())");
+  }
+
+  const usesRtcPeerConnection = frontendSource.includes("RTCPeerConnection");
+  if (usesRtcPeerConnection && !frontendSource.includes("getIceServers")) {
+    const settingsImportPattern = /(import\s+\{[^}]*\breadSettings\b[^}]*\}\s+from\s+["']@\/lib\/settings["'];\r?\n)/;
+    frontendSource = frontendSource.replace(
+      settingsImportPattern,
+      `$1import { getIceServers } from "@/lib/webrtc";\n`
+    );
+  }
+
+  frontendSource = frontendSource.replace(
+    /const iceServers: RTCConfiguration = \{\r?\n\s*iceServers: \[\{ urls: "stun:stun\.l\.google\.com:19302" \}\],\r?\n\};/,
+    `const iceServers: RTCConfiguration = { iceServers: getIceServers() };`
+  );
+
+  frontendSource = frontendSource.replace(
+    /new RTCPeerConnection\(\{ iceServers: \[\{ urls: "stun:stun\.l\.google\.com:19302" \}\] \}\)/g,
+    `new RTCPeerConnection({ iceServers: getIceServers() })`
+  );
+
+  if (frontendSource !== originalFrontendSource) {
+    fs.writeFileSync(filePath, frontendSource, "utf8");
+    console.log(`Hardened frontend: ${relativePath}`);
+  }
+}
+
 const changed = source !== initialSource;
 console.log(`${inPlace ? "Hardened" : "Prepared"} backend: ${path.relative(repositoryRoot, outputPath)}`);
-console.log(`Source changed: ${changed ? "yes" : "no"}`);
+console.log(`Backend source changed: ${changed ? "yes" : "no"}`);
