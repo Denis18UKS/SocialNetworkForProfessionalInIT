@@ -43,6 +43,31 @@ apt-get install -y \
   ufw fail2ban \
   build-essential python3 make g++
 
+# COMPILER_SANDBOX: docker-engine
+. /etc/os-release
+DOCKER_DISTRO="${ID}"
+DOCKER_SUITE="${UBUNTU_CODENAME:-${VERSION_CODENAME}}"
+if [[ "${DOCKER_DISTRO}" != "ubuntu" && "${DOCKER_DISTRO}" != "debian" ]]; then
+  echo "The compiler sandbox installer supports Ubuntu or Debian." >&2
+  exit 1
+fi
+apt-get remove -y docker.io docker-compose docker-doc podman-docker containerd runc >/dev/null 2>&1 || true
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL "https://download.docker.com/linux/${DOCKER_DISTRO}/gpg" -o /etc/apt/keyrings/docker.asc
+chmod a+r /etc/apt/keyrings/docker.asc
+cat > /etc/apt/sources.list.d/docker.sources <<DOCKER_REPOSITORY
+Types: deb
+URIs: https://download.docker.com/linux/${DOCKER_DISTRO}
+Suites: ${DOCKER_SUITE}
+Components: stable
+Architectures: $(dpkg --print-architecture)
+Signed-By: /etc/apt/keyrings/docker.asc
+DOCKER_REPOSITORY
+apt-get update
+apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+systemctl enable --now docker
+docker info --format '{{json .SecurityOptions}}' | grep -q 'seccomp' || { echo "Docker seccomp is required." >&2; exit 1; }
+
 if ! command -v node >/dev/null 2>&1 || [[ "$(node -p 'Number(process.versions.node.split(".")[0])')" -lt 22 ]]; then
   curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
   apt-get install -y nodejs
@@ -53,6 +78,15 @@ npm install --global pm2
 if ! id "$APP_USER" >/dev/null 2>&1; then
   useradd --system --create-home --home-dir "$APP_HOME" --shell /usr/sbin/nologin "$APP_USER"
 fi
+
+# COMPILER_SANDBOX: service-user
+COMPILER_USER="socialbird-compiler"
+COMPILER_HOME="/var/lib/socialbird-compiler"
+if ! id "$COMPILER_USER" >/dev/null 2>&1; then
+  useradd --system --create-home --home-dir "$COMPILER_HOME" --shell /usr/sbin/nologin --gid "$APP_GROUP" "$COMPILER_USER"
+fi
+usermod -aG docker "$COMPILER_USER"
+install -d -o "$COMPILER_USER" -g "$APP_GROUP" "$COMPILER_HOME"
 
 install -d -o "$APP_USER" -g "$APP_GROUP" "$APP_ROOT" "$APP_HOME" "$LOG_DIRECTORY" "$BACKUP_DIRECTORY"
 install -d -m 0750 "$CONFIG_DIRECTORY"
@@ -120,7 +154,12 @@ MAX_UPLOAD_BYTES=26214400
 JSON_BODY_LIMIT=2mb
 WS_MAX_PAYLOAD_BYTES=1048576
 WS_HEARTBEAT_MS=30000
-ENABLE_COMPILER=false
+ENABLE_COMPILER=true
+COMPILER_SOCKET=/run/socialbird-compiler/runner.sock
+COMPILER_REQUEST_TIMEOUT_MS=12000
+COMPILER_MAX_CODE_BYTES=200000
+COMPILER_RUNS_PER_MINUTE=10
+COMPILER_MAX_ACTIVE_PER_USER=1
 ENV
 chmod 0640 "$BACKEND_ENV"
 chown root:"$APP_GROUP" "$BACKEND_ENV"
@@ -136,9 +175,29 @@ chown "$APP_USER:$APP_GROUP" "${APP_DIRECTORY}/.env.production"
 chmod 0600 "${APP_DIRECTORY}/.env.production"
 
 sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/harden-source.mjs"
+sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/enable-sandbox-compiler.mjs"
 
 sudo -u "$APP_USER" bash -lc "cd '${APP_DIRECTORY}' && npm ci && npm run build"
 sudo -u "$APP_USER" bash -lc "cd '${APP_DIRECTORY}/backend' && npm ci --omit=dev"
+
+# COMPILER_SANDBOX: build-and-service
+docker build --pull --tag socialbird/compiler-sandbox:latest "${APP_DIRECTORY}/deploy/compiler-sandbox"
+install -d -o root -g root -m 0755 /usr/local/lib/socialbird-compiler-runner
+install -o root -g root -m 0644 "${APP_DIRECTORY}/deploy/compiler-runner/server.mjs" /usr/local/lib/socialbird-compiler-runner/server.mjs
+install -o root -g root -m 0644 "${APP_DIRECTORY}/deploy/systemd/socialbird-compiler-runner.service" /etc/systemd/system/socialbird-compiler-runner.service
+systemctl daemon-reload
+systemctl enable --now socialbird-compiler-runner
+for attempt in {1..20}; do
+  if curl --silent --fail --unix-socket /run/socialbird-compiler/runner.sock http://localhost/health >/dev/null; then
+    break
+  fi
+  if [[ "$attempt" -eq 20 ]]; then
+    journalctl -u socialbird-compiler-runner --no-pager -n 100
+    exit 1
+  fi
+  sleep 1
+done
+COMPILER_SANDBOX_IMAGE=socialbird/compiler-sandbox:latest node "${APP_DIRECTORY}/deploy/compiler-sandbox/smoke-test.mjs"
 
 install -d -o "$APP_USER" -g "$APP_GROUP" \
   "${APP_DIRECTORY}/backend/uploads" \
@@ -257,5 +316,5 @@ Secrets were written to:
   ${BACKEND_ENV}
   ${APP_DIRECTORY}/.env.production
 
-The online compiler remains disabled until it is moved into an isolated sandbox.
+The online compiler is enabled through disposable, network-isolated Docker sandboxes.
 RESULT

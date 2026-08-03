@@ -14,15 +14,8 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs'); // Добавляем модуль для работы с файловой системой
 const crypto = require('crypto');
-const os = require('os');
-const { spawn } = require('child_process');
-
-let esbuild = null;
-try {
-    esbuild = require(path.join(__dirname, '..', 'node_modules', 'esbuild'));
-} catch (error) {
-    esbuild = null;
-}
+// PRODUCTION_HARDENING: isolated-compiler-client
+const { runSandboxedCompilerJob } = require('./compiler-client');
 
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
@@ -890,234 +883,7 @@ const compilerExtensions = {
     react: 'jsx',
 };
 
-const runProcess = (command, args, cwd, timeoutMs = 8000) => new Promise((resolve) => {
-    const child = spawn(command, args, { cwd, windowsHide: true });
-    let stdout = '';
-    let stderr = '';
-    let finished = false;
-
-    const timer = setTimeout(() => {
-        if (finished) return;
-        finished = true;
-        child.kill('SIGKILL');
-        resolve({
-            command: [command, ...args].join(' '),
-            stdout,
-            stderr: `${stderr}\nВыполнение остановлено: превышен лимит ${timeoutMs / 1000} сек.`.trim(),
-            exitCode: null,
-            timedOut: true,
-        });
-    }, timeoutMs);
-
-    child.stdout.on('data', (data) => {
-        stdout += data.toString();
-    });
-
-    child.stderr.on('data', (data) => {
-        stderr += data.toString();
-    });
-
-    child.on('error', (error) => {
-        if (finished) return;
-        finished = true;
-        clearTimeout(timer);
-        resolve({
-            command: [command, ...args].join(' '),
-            stdout,
-            stderr: error.code === 'ENOENT'
-                ? `Инструмент "${command}" не найден на сервере. Установите его и добавьте в PATH.`
-                : error.message,
-            exitCode: null,
-            missingTool: error.code === 'ENOENT',
-        });
-    });
-
-    child.on('close', (code) => {
-        if (finished) return;
-        finished = true;
-        clearTimeout(timer);
-        resolve({
-            command: [command, ...args].join(' '),
-            stdout,
-            stderr,
-            exitCode: code,
-        });
-    });
-});
-
-const buildDiagnostics = (steps, language) => {
-    const diagnostics = [];
-    for (const step of steps) {
-        if (step.missingTool) {
-            diagnostics.push(step.stderr);
-        } else if (step.timedOut) {
-            diagnostics.push('Код выполнялся слишком долго. Проверьте бесконечные циклы или ожидание ввода.');
-        } else if (step.exitCode && step.exitCode !== 0) {
-            diagnostics.push(`${language}: команда завершилась с кодом ${step.exitCode}. Проверьте сообщения компилятора ниже.`);
-        }
-    }
-    if (diagnostics.length === 0) {
-        diagnostics.push('Критичных ошибок не найдено.');
-    }
-    return diagnostics;
-};
-
-const buildFriendlyDiagnostics = (steps, language) => {
-    if (!Array.isArray(steps) || steps.length === 0) {
-        return ['Пока нет результата. Запустите код, и здесь появится объяснение простыми словами.'];
-    }
-
-    const failedStep = steps.find((step) => step.missingTool || step.timedOut || (step.exitCode && step.exitCode !== 0));
-    if (!failedStep) {
-        return ['Код выглядит рабочим: компилятор не сообщил о критичных ошибках.'];
-    }
-
-    if (failedStep.missingTool) {
-        return [`На сервере не найден инструмент для ${language}. Его нужно установить и добавить в PATH.`];
-    }
-
-    if (failedStep.timedOut) {
-        return ['Код выполнялся слишком долго. Частая причина: бесконечный цикл или программа ждёт ввод, которого нет.'];
-    }
-
-    const text = `${failedStep.stderr || ''}\n${failedStep.stdout || ''}`;
-    const lineMatch = text.match(/(?:line|строка|:)(\d+)/i) || text.match(/\((\d+),\d+\)/);
-    const lineHint = lineMatch?.[1] ? ` Примерное место: строка ${lineMatch[1]}.` : '';
-
-    if (/syntax|expected|unexpected|parse|синтак/i.test(text)) {
-        return [`Похоже на синтаксическую ошибку: где-то пропущена скобка, кавычка, точка с запятой или написано лишнее слово.${lineHint}`];
-    }
-
-    if (/not defined|undefined|cannot find|не найден|undeclared|nameerror/i.test(text)) {
-        return [`Похоже, используется имя, которое программа не знает. Проверьте название переменной, функции, класса или импорт.${lineHint}`];
-    }
-
-    if (/type|cannot convert|incompatible|тип/i.test(text)) {
-        return [`Похоже, программа получила значение не того типа. Проверьте числа, строки, массивы и возвращаемые значения.${lineHint}`];
-    }
-
-    if (/permission|access|denied/i.test(text)) {
-        return ['Программе не хватило прав на действие с файлом или командой. Проверьте доступы и путь.'];
-    }
-
-    return [`Код не запустился. Посмотрите технический лог ниже: там есть точный текст ошибки от компилятора.${lineHint}`];
-};
-
-const compileReactCode = async (code) => {
-    if (!esbuild) {
-        return {
-            success: false,
-            stdout: '',
-            stderr: 'esbuild не найден. Установите зависимости проекта, чтобы компилировать React/JSX.',
-            diagnostics: ['React-компиляция требует пакет esbuild из зависимостей frontend.'],
-            friendlyDiagnostics: ['Сервер пока не умеет проверять React, потому что не найден пакет esbuild. Установите зависимости frontend.'],
-            steps: [{ command: 'esbuild transform', stdout: '', stderr: 'esbuild не найден', exitCode: 1, missingTool: true }],
-        };
-    }
-
-    try {
-        const transformed = await esbuild.transform(code, {
-            loader: 'jsx',
-            format: 'esm',
-            jsx: 'automatic',
-            target: 'es2020',
-            sourcemap: false,
-        });
-
-        return {
-            success: true,
-            stdout: transformed.code,
-            stderr: '',
-            diagnostics: ['React/JSX успешно скомпилирован. Результат показан в stdout.'],
-            friendlyDiagnostics: ['React-код успешно превратился в обычный JavaScript. Синтаксических проблем не найдено.'],
-            steps: [{ command: 'esbuild transform --loader=jsx --jsx=automatic', stdout: transformed.code, stderr: '', exitCode: 0 }],
-        };
-    } catch (error) {
-        return {
-            success: false,
-            stdout: '',
-            stderr: error.message,
-            diagnostics: ['React/JSX не скомпилировался. Проверьте синтаксис компонента и импортов.'],
-            friendlyDiagnostics: ['React не смог разобрать JSX. Проверьте закрывающие теги, фигурные скобки и import/export.'],
-            steps: [{ command: 'esbuild transform --loader=jsx --jsx=automatic', stdout: '', stderr: error.message, exitCode: 1 }],
-        };
-    }
-};
-
-const runCompilerJob = async (language, code) => {
-    const config = compilerLanguages[language];
-    if (!config) {
-        return {
-            success: false,
-            diagnostics: ['Неподдерживаемый язык.'],
-            friendlyDiagnostics: ['Этот язык сейчас не подключен к компилятору. Выберите другой язык во вкладках.'],
-            steps: [],
-        };
-    }
-
-    if (typeof code !== 'string' || code.trim().length === 0) {
-        return {
-            success: false,
-            diagnostics: ['Код пустой.'],
-            friendlyDiagnostics: ['Поле кода пустое. Вставьте или напишите код и запустите снова.'],
-            steps: [],
-        };
-    }
-
-    if (Buffer.byteLength(code, 'utf8') > 200000) {
-        return {
-            success: false,
-            diagnostics: ['Код слишком большой. Максимум 200 КБ.'],
-            friendlyDiagnostics: ['Кода слишком много для одного запуска. Попробуйте уменьшить пример.'],
-            steps: [],
-        };
-    }
-
-    if (language === 'react') {
-        return compileReactCode(code);
-    }
-
-    const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'itbird-compiler-'));
-    const sourcePath = path.join(tempDir, config.filename);
-    const steps = [];
-
-    try {
-        await fs.promises.writeFile(sourcePath, code, 'utf8');
-
-        if (language === 'java') {
-            steps.push(await runProcess('javac', [sourcePath], tempDir));
-            if (steps[0].exitCode === 0) steps.push(await runProcess('java', ['-cp', tempDir, 'Main'], tempDir));
-        } else if (language === 'csharp') {
-            const outputPath = path.join(tempDir, 'Program.exe');
-            steps.push(await runProcess('csc', ['-nologo', `-out:${outputPath}`, sourcePath], tempDir));
-            if (steps[0].exitCode === 0) steps.push(await runProcess(outputPath, [], tempDir));
-        } else if (language === 'cpp') {
-            const outputPath = path.join(tempDir, process.platform === 'win32' ? 'main.exe' : 'main');
-            steps.push(await runProcess('g++', [sourcePath, '-std=c++17', '-O2', '-o', outputPath], tempDir));
-            if (steps[0].exitCode === 0) steps.push(await runProcess(outputPath, [], tempDir));
-        } else if (language === 'lua') {
-            steps.push(await runProcess('lua', [sourcePath], tempDir));
-        } else if (language === 'python') {
-            steps.push(await runProcess('python', [sourcePath], tempDir));
-        } else if (language === 'javascript' || language === 'nodejs') {
-            steps.push(await runProcess('node', [sourcePath], tempDir));
-        } else if (language === 'php') {
-            steps.push(await runProcess('php', [sourcePath], tempDir));
-        }
-
-        const failed = steps.some((step) => step.exitCode !== 0 || step.timedOut || step.missingTool);
-        return {
-            success: !failed,
-            stdout: steps.map((step) => step.stdout).filter(Boolean).join('\n'),
-            stderr: steps.map((step) => step.stderr).filter(Boolean).join('\n'),
-            diagnostics: buildDiagnostics(steps, config.label),
-            friendlyDiagnostics: buildFriendlyDiagnostics(steps, config.label),
-            steps,
-        };
-    } finally {
-        fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => {});
-    }
-};
+// Untrusted code is executed only by the isolated compiler runner.
 
 // Middleware для проверки токена
 const verifyToken = (req, res, next) => {
@@ -1145,26 +911,47 @@ const verifyAdmin = (req, res, next) => {
     next();
 };
 
+// PRODUCTION_HARDENING: sandboxed-compiler-route
 app.post('/compiler/run', verifyToken, async (req, res) => {
-    // PRODUCTION_HARDENING: compiler-disabled-by-default
     if (String(process.env.ENABLE_COMPILER || 'false').toLowerCase() !== 'true') {
         return res.status(503).json({
-            message: 'Онлайн-компилятор временно отключен до запуска изолированной песочницы.',
+            success: false,
+            stdout: '',
+            stderr: 'Изолированный компилятор отключен в конфигурации сервера.',
+            diagnostics: ['Компилятор временно недоступен.'],
+            friendlyDiagnostics: ['Администратор ещё не включил безопасную песочницу.'],
+            steps: [],
+            sandboxed: true,
         });
     }
+
     const { language, code } = req.body;
 
     try {
-        const result = await runCompilerJob(language, code);
+        const result = await runSandboxedCompilerJob({
+            language,
+            code,
+            userId: req.user.id,
+        });
         res.status(200).json(result);
     } catch (error) {
-        console.error('Ошибка онлайн-компилятора:', error);
-        res.status(500).json({
+        console.error('Ошибка изолированного онлайн-компилятора:', error.message);
+        if (error.retryAfterSeconds) {
+            res.setHeader('Retry-After', String(error.retryAfterSeconds));
+        }
+        if (error.compilerResult) {
+            return res.status(error.statusCode || 500).json(error.compilerResult);
+        }
+        res.status(error.statusCode || 500).json({
             success: false,
             stdout: '',
             stderr: error.message,
-            diagnostics: ['Сервер не смог обработать запуск кода.'],
+            diagnostics: ['Сервер не смог выполнить код в изолированной среде.'],
+            friendlyDiagnostics: [error.statusCode === 429
+                ? error.message
+                : 'Безопасная песочница временно недоступна.'],
             steps: [],
+            sandboxed: true,
         });
     }
 });
