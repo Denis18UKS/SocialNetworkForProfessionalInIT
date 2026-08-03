@@ -913,6 +913,12 @@ const verifyAdmin = (req, res, next) => {
 
 // PRODUCTION_HARDENING: sandboxed-compiler-route
 app.post('/compiler/run', verifyToken, async (req, res) => {
+    // PRODUCTION_HARDENING: compiler-disabled-by-default
+    if (String(process.env.ENABLE_COMPILER || 'false').toLowerCase() !== 'true') {
+        return res.status(503).json({
+            message: 'Онлайн-компилятор временно отключен до запуска изолированной песочницы.',
+        });
+    }
     if (String(process.env.ENABLE_COMPILER || 'false').toLowerCase() !== 'true') {
         return res.status(503).json({
             success: false,
