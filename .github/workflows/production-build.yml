@@ -1,0 +1,102 @@
+name: Production hardening and build
+
+on:
+  push:
+    branches:
+      - deploy/socialbird-vps-production
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: socialbird-production-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  harden-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout production branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            backend/package-lock.json
+
+      - name: Apply production, compiler and installer hardening
+        run: |
+          node deploy/harden-source.mjs --in-place
+          node deploy/enable-sandbox-compiler.mjs --in-place
+          node deploy/patch-installer.mjs
+
+      - name: Check generated backend, runner and installer syntax
+        run: |
+          node --check backend/server.js
+          node --check backend/compiler-client.js
+          node --check deploy/compiler-runner/server.mjs
+          node --check deploy/compiler-sandbox/runner.mjs
+          node --check deploy/compiler-sandbox/smoke-test.mjs
+          node --check deploy/enable-sandbox-compiler.mjs
+          node --check deploy/patch-installer.mjs
+          bash -n deploy/install.sh
+          node deploy/harden-source.mjs
+          node deploy/enable-sandbox-compiler.mjs
+          node --check backend/server.production.js
+
+      - name: Install frontend dependencies
+        run: npm ci
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: "true"
+
+      - name: Build frontend
+        run: npm run build
+        env:
+          VITE_API_URL: https://api.31.207.74.138.nip.io
+          VITE_STUN_URLS: stun:stun.l.google.com:19302
+          VITE_TURN_URLS: turn:api.31.207.74.138.nip.io:3478?transport=udp,turn:api.31.207.74.138.nip.io:3478?transport=tcp
+          VITE_TURN_USERNAME: socialbird
+          VITE_TURN_CREDENTIAL: ci-placeholder-only
+
+      - name: Install backend dependencies
+        run: npm ci
+        working-directory: backend
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: "true"
+
+      - name: Build isolated compiler image
+        run: docker build --pull --tag socialbird/compiler-sandbox:latest deploy/compiler-sandbox
+
+      - name: Smoke-test all compiler languages
+        run: node deploy/compiler-sandbox/smoke-test.mjs
+
+      - name: Validate repository changes
+        run: git diff --check
+
+      - name: Commit generated hardened source
+        if: github.event_name == 'push'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/server.js \
+            deploy/install.sh \
+            src/components/RealtimeNotifications.tsx \
+            src/components/VoiceCallControls.tsx \
+            src/pages/Chats.tsx \
+            src/pages/GroupChats.tsx
+          if ! git diff --cached --quiet; then
+            git commit -m "Apply generated production hardening"
+            git push origin HEAD:${GITHUB_REF_NAME}
+          fi

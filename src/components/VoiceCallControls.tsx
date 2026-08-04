@@ -20,6 +20,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { getWsUrl, readSettings } from "@/lib/settings";
+import { getIceServers } from "@/lib/webrtc";
+import { createReconnectingWebSocket } from "@/lib/reconnecting-websocket";
 
 type CallMode = "private" | "group";
 type CallKind = "voice" | "video";
@@ -38,9 +40,7 @@ type VoiceCallControlsProps = {
   participants: CallParticipant[];
 };
 
-const iceServers: RTCConfiguration = {
-  iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-};
+const iceServers: RTCConfiguration = { iceServers: getIceServers() };
 
 type ActiveCallWindow = typeof window & {
   __itbirdActiveCallEnd?: () => void;
@@ -481,7 +481,7 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
   useEffect(() => {
     if (!token || !currentUserId) return;
 
-    const socket = new WebSocket(getWsUrl());
+    const socket = createReconnectingWebSocket(getWsUrl());
     socketRef.current = socket;
     socket.onopen = () => socket.send(JSON.stringify({ type: "AUTH", token }));
     socket.onmessage = async (event) => {
