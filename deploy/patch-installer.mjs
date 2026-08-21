@@ -37,11 +37,27 @@ if (!source.includes('COMPILER_SOCKET=/run/socialbird-compiler/runner.sock')) {
   );
 }
 
+if (!source.includes('apply-app-fixes.mjs')) {
+  replaceRequired(
+    'application fixes before production hardening',
+    /sudo -u \"\$APP_USER\" node \"\$\{APP_DIRECTORY\}\/deploy\/harden-source\.mjs\"/,
+    `sudo -u \"$APP_USER\" node \"\${APP_DIRECTORY}/deploy/apply-app-fixes.mjs\"\nsudo -u \"$APP_USER\" node \"\${APP_DIRECTORY}/deploy/harden-source.mjs\"`
+  );
+}
+
 if (!source.includes('enable-sandbox-compiler.mjs')) {
   replaceRequired(
     'sandbox compiler source patch',
     /sudo -u \"\$APP_USER\" node \"\$\{APP_DIRECTORY\}\/deploy\/harden-source\.mjs\"/,
     `sudo -u \"$APP_USER\" node \"\${APP_DIRECTORY}/deploy/harden-source.mjs\"\nsudo -u \"$APP_USER\" node \"\${APP_DIRECTORY}/deploy/enable-sandbox-compiler.mjs\"`
+  );
+}
+
+if (!source.includes('# APP_FIX: puppeteer-browser-install')) {
+  replaceRequired(
+    'Puppeteer browser installation',
+    /sudo -u \"\$APP_USER\" bash -lc \"cd '\$\{APP_DIRECTORY\}\/backend' && npm ci --omit=dev\"/,
+    `sudo -u \"$APP_USER\" bash -lc \"cd '\${APP_DIRECTORY}/backend' && npm ci --omit=dev\"\n\n# APP_FIX: puppeteer-browser-install\ninstall -d -o \"$APP_USER\" -g \"$APP_GROUP\" \"${APP_HOME}/.cache\" \"${APP_HOME}/.cache/puppeteer\"\nHOME=\"$APP_HOME\" PUPPETEER_CACHE_DIR=\"${APP_HOME}/.cache/puppeteer\" bash -lc \"cd '\${APP_DIRECTORY}/backend' && npx puppeteer browsers install chrome --install-deps\"\nchown -R \"$APP_USER:$APP_GROUP\" \"${APP_HOME}/.cache\"`
   );
 }
 
