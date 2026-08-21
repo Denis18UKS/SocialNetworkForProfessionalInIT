@@ -36,9 +36,10 @@ jobs:
             package-lock.json
             backend/package-lock.json
 
-      - name: Apply application, production, compiler and installer fixes
+      - name: Apply application, mobile, production, compiler and installer fixes
         run: |
           node deploy/apply-app-fixes.mjs
+          node deploy/apply-mobile-layout-fixes.mjs
           node deploy/harden-source.mjs --in-place
           node deploy/enable-sandbox-compiler.mjs --in-place
           node deploy/patch-installer.mjs
@@ -46,6 +47,7 @@ jobs:
       - name: Check generated backend, runner and installer syntax
         run: |
           node --check deploy/apply-app-fixes.mjs
+          node --check deploy/apply-mobile-layout-fixes.mjs
           node --check backend/server.js
           node --check backend/compiler-client.js
           node --check deploy/compiler-runner/server.mjs
@@ -55,6 +57,7 @@ jobs:
           node --check deploy/patch-installer.mjs
           bash -n deploy/install.sh
           node deploy/apply-app-fixes.mjs
+          node deploy/apply-mobile-layout-fixes.mjs
           node deploy/harden-source.mjs
           node deploy/enable-sandbox-compiler.mjs
           node --check backend/server.production.js
@@ -95,12 +98,14 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add backend/server.js \
             deploy/install.sh \
+            src/App.tsx \
+            src/index.css \
             src/components/RealtimeNotifications.tsx \
             src/components/VoiceCallControls.tsx \
             src/pages/Users.tsx \
             src/pages/Chats.tsx \
             src/pages/GroupChats.tsx
           if ! git diff --cached --quiet; then
-            git commit -m "Apply generated production and application fixes"
+            git commit -m "Apply generated production application and mobile fixes"
             git push origin HEAD:${GITHUB_REF_NAME}
           fi
