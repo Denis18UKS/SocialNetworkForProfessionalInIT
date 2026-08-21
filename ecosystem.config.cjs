@@ -43,6 +43,8 @@ module.exports = {
       env: {
         ...backendEnv,
         NODE_ENV: "production",
+        HOME: "/var/lib/socialbird",
+        PUPPETEER_CACHE_DIR: "/var/lib/socialbird/.cache/puppeteer",
       },
       error_file: "/var/log/socialbird/api-error.log",
       out_file: "/var/log/socialbird/api-output.log",
