@@ -63,7 +63,6 @@ jobs:
           node --check deploy/patch-installer.mjs
           bash -n deploy/install.sh
           bash -n deploy/update-live-call-mobile-upload.sh
-          node deploy/apply-call-reliability-fixes.mjs
           node deploy/apply-call-mobile-upload-fixes.mjs
           node deploy/harden-source.mjs
           node deploy/enable-sandbox-compiler.mjs
