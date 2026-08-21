@@ -106,6 +106,8 @@ const getSpeechRecognition = () => {
     return speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition;
 };
 
+const MAX_CHAT_UPLOAD_BYTES = 100 * 1024 * 1024;
+
 const Chats = () => {
 
     const [socket, setSocket] = useState<WebSocket | null>(null);
@@ -538,11 +540,22 @@ const Chats = () => {
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files.length > 0) {
-            setMediaFile(e.target.files[0]);
+            const file = e.target.files[0];
+            if (file.size > MAX_CHAT_UPLOAD_BYTES) {
+                toast.error("Файл слишком большой. Максимальный размер — 100 МБ.");
+                e.target.value = "";
+                setMediaFile(null);
+                return;
+            }
+            setMediaFile(file);
         }
     };
 
     const sendMediaMessage = async (file: File, messageText = newMessage.trim()) => {
+        if (file.size > MAX_CHAT_UPLOAD_BYTES) {
+            toast.error("Файл слишком большой. Максимальный размер — 100 МБ.");
+            return;
+        }
         if (isBlockedBySelectedUser) {
             toast.error("Вы не можете написать: пользователь ограничил круг лиц");
             return;
@@ -960,11 +973,11 @@ const Chats = () => {
                 </motion.aside>
 
                 {/* Основной чат */}
-                <div className={`${selectedUser ? "flex" : "hidden md:flex"} min-h-0 flex-1 flex-col`}>
+                <div className={`${selectedUser ? "flex" : "hidden md:flex"} min-h-0 min-w-0 w-full max-w-full flex-1 flex-col overflow-hidden`}>
                     {selectedUser ? (
                         <>
                             {/* Шапка чата */}
-                            <Card className="shrink-0 rounded-none border-0 border-b border-gray-200 dark:border-gray-700">
+                            <Card className="w-full min-w-0 max-w-full shrink-0 overflow-hidden rounded-none border-0 border-b border-gray-200 dark:border-gray-700">
                                 <CardHeader className="shrink-0 px-3 py-2 sm:px-6 sm:py-3">
                                     <div className="flex min-w-0 items-center space-x-3">
                                         <Button
@@ -993,7 +1006,7 @@ const Chats = () => {
                                             </CardDescription>
                                         </div>
                                     </div>
-                                    <div className="mt-2 flex min-w-0 flex-nowrap items-center gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:mt-3 sm:flex-wrap sm:justify-end sm:overflow-visible sm:pb-0">
+                                    <div className="mt-2 flex w-full min-w-0 max-w-full flex-nowrap items-center gap-2 overflow-x-auto overscroll-x-contain pb-1 pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:mt-3 sm:flex-wrap sm:justify-end sm:overflow-visible sm:pb-0 sm:pr-0">
                                         {pinnedMessages.map((pinnedMessage) => (
                                             <button
                                                 key={`pinned-${pinnedMessage.id}-${pinnedMessage.is_pinned ? 'all' : 'self'}`}
@@ -1044,7 +1057,7 @@ const Chats = () => {
                                 ref={messagesContainerRef}
                                 className="min-h-0 flex-1 overflow-y-auto bg-gray-50 p-2 overscroll-contain dark:bg-gray-900/50 sm:p-4"
                             >
-                                <div className="max-w-3xl mx-auto space-y-4">
+                                <div className="mx-auto w-full min-w-0 max-w-3xl space-y-4 overflow-x-hidden">
                                     {messages.map((msg) => (
                                         <motion.div
                                             key={msg.id}
@@ -1057,7 +1070,7 @@ const Chats = () => {
                                             className={`flex rounded-xl transition-shadow ${msg.user_id === currentUser?.id ? 'justify-end' : 'justify-start'} ${highlightedMessageId === msg.id ? 'ring-2 ring-[#6E59A5] ring-offset-4 ring-offset-gray-50 dark:ring-offset-gray-900/50' : ''}`}
                                         >
                                             <div
-                                                className={`max-w-[88%] break-words rounded-lg p-3 sm:max-w-[80%] ${msg.user_id === currentUser?.id
+                                                className={`min-w-0 max-w-[88%] overflow-hidden break-words rounded-lg p-2.5 sm:max-w-[80%] sm:p-3 ${msg.user_id === currentUser?.id
                                                     ? 'bg-[#6E59A5] text-white rounded-tr-none'
                                                     : 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-tl-none shadow-sm'}`}
                                             >
@@ -1091,7 +1104,7 @@ const Chats = () => {
                                                             <a
                                                                 href={mediaUrl}
                                                                 download={msg.file_name || true} // Добавляем атрибут download
-                                                                className="inline-flex items-center gap-2 bg-white dark:bg-gray-700 text-gray-800 dark:text-white px-3 py-1 rounded-md border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
+                                                                className="flex w-full min-w-0 max-w-full items-center gap-2 overflow-hidden rounded-md border border-gray-200 bg-white px-2.5 py-1 text-gray-800 transition-colors hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:hover:bg-gray-600 sm:px-3"
                                                                 target="_blank"
                                                                 rel="noopener noreferrer"
                                                                 onClick={(e) => {
@@ -1108,9 +1121,9 @@ const Chats = () => {
                                                                 }}
                                                             >
                                                                 {icon}
-                                                                <span>{label}</span>
+                                                                <span className="min-w-0 flex-1 truncate">{label}</span>
                                                                 {fileSize && (
-                                                                    <span className="text-xs text-gray-500 dark:text-gray-400 ml-2">
+                                                                    <span className="ml-1 shrink-0 text-xs text-gray-500 dark:text-gray-400 sm:ml-2">
                                                                         {fileSize}
                                                                     </span>
                                                                 )}
@@ -1247,7 +1260,7 @@ const Chats = () => {
 
                             {/* Поле ввода сообщения */}
                             <div className="mobile-bottom-safe shrink-0 border-t border-gray-200 bg-white px-2 pb-2 pt-2 dark:border-gray-700 dark:bg-gray-800 sm:p-4">
-                                <div className="max-w-3xl mx-auto">
+                                <div className="mx-auto w-full min-w-0 max-w-3xl">
                                     {messageRestrictionText ? (
                                         <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-center text-sm font-medium text-gray-600 dark:border-gray-700 dark:bg-gray-900/60 dark:text-gray-300">
                                             {messageRestrictionText}

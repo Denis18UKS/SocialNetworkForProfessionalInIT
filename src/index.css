@@ -45,7 +45,9 @@
 
     --app-viewport-height: 100dvh;
     --app-viewport-top: 0px;
+    --app-viewport-bottom: 0px;
     --mobile-safe-bottom: max(env(safe-area-inset-bottom, 0px), 10px);
+    --mobile-visible-bottom: max(var(--mobile-safe-bottom), var(--app-viewport-bottom, 0px));
   }
 
   .dark {
@@ -123,11 +125,53 @@
   }
 
   .mobile-bottom-safe {
-    padding-bottom: var(--mobile-safe-bottom);
+    padding-bottom: calc(8px + var(--mobile-visible-bottom, var(--mobile-safe-bottom)));
   }
 
   .mobile-floating-bottom {
-    bottom: calc(1rem + var(--mobile-safe-bottom));
+    bottom: calc(0.75rem + var(--mobile-visible-bottom, var(--mobile-safe-bottom)));
+  }
+
+  .itbird-call-panel {
+    bottom: calc(0.75rem + var(--mobile-visible-bottom, var(--mobile-safe-bottom))) !important;
+  }
+
+  .itbird-call-remote-video {
+    width: min(100%, 320px);
+    max-width: 100%;
+    aspect-ratio: 16 / 9;
+    height: auto !important;
+    object-fit: cover;
+  }
+
+  @media (max-width: 640px) {
+    .itbird-call-panel {
+      left: 8px !important;
+      right: 8px !important;
+      width: auto !important;
+      max-width: none !important;
+      max-height: min(62dvh, calc(var(--app-viewport-height, 100dvh) - 1rem - var(--mobile-visible-bottom, 0px))) !important;
+      padding: 0.75rem !important;
+      gap: 0.65rem !important;
+      border-radius: 1rem !important;
+      overflow-x: hidden !important;
+      overflow-y: auto !important;
+      overscroll-behavior: contain;
+    }
+
+    .itbird-call-participants {
+      width: 100%;
+      max-width: 100%;
+      overflow-x: auto;
+      flex-wrap: nowrap !important;
+      justify-content: flex-start !important;
+      padding-bottom: 2px;
+      scrollbar-width: none;
+    }
+
+    .itbird-call-participants::-webkit-scrollbar {
+      display: none;
+    }
   }
 
   .liquid-button {

@@ -82,10 +82,27 @@ if (transporter) {
 const upload = multer({
     storage,
     limits: {
-        fileSize: Number(process.env.MAX_UPLOAD_BYTES || 25 * 1024 * 1024),
+        fileSize: Number(process.env.MAX_UPLOAD_BYTES || 100 * 1024 * 1024),
         files: 1,
     },
 });
+
+const uploadChatMedia = (req, res, next) => {
+    upload.single('media')(req, res, (error) => {
+        if (!error) return next();
+        if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
+            return res.status(413).json({
+                message: 'Файл слишком большой. Максимальный размер — 100 МБ.',
+                code: 'FILE_TOO_LARGE',
+            });
+        }
+        console.error('Chat upload middleware error:', error);
+        return res.status(400).json({
+            message: 'Не удалось принять файл. Проверьте файл и повторите попытку.',
+            code: error?.code || 'UPLOAD_ERROR',
+        });
+    });
+};
 
 const WebSocket = require('ws');
 const server = http.createServer(app);
@@ -2038,7 +2055,7 @@ app.put('/messages/:messageId', verifyToken, async (req, res) => {
 });
 
 // Добавление загрузки файлов
-app.post('/messages/upload', verifyToken, upload.single('media'), async (req, res) => {
+app.post('/messages/upload', verifyToken, uploadChatMedia, async (req, res) => {
     console.log("Полученные данные:", req.body);
     const chatId = Number(req.body.chatId) || null;
 

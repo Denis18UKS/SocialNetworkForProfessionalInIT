@@ -60,9 +60,9 @@ const VoiceMessageBubble = ({ src, transcript, revealed, onToggleTranscript, onM
   const activeBars = Math.floor(progress * waveform.length);
 
   return (
-    <div className="mt-2 w-full min-w-0 rounded-2xl bg-[#8064c8] px-3 py-2 text-white shadow-sm sm:w-[300px] sm:max-w-[76vw]">
+    <div className="mt-2 w-full min-w-0 max-w-full overflow-hidden rounded-2xl bg-[#8064c8] px-2.5 py-2 text-white shadow-sm sm:w-[300px] sm:max-w-[76vw] sm:px-3">
       <audio ref={audioRef} src={src} preload="metadata" className="hidden" />
-      <div className="flex min-w-0 items-center gap-3">
+      <div className="flex min-w-0 max-w-full items-center gap-2 sm:gap-3">
         <button
           type="button"
           onClick={togglePlay}

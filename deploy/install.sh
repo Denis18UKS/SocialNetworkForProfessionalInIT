@@ -150,7 +150,7 @@ SMTP_PASSWORD=
 SMTP_FROM=
 GITHUB_PERSONAL_ACCESS_TOKEN=
 GITLAB_PERSONAL_ACCESS_TOKEN=
-MAX_UPLOAD_BYTES=26214400
+MAX_UPLOAD_BYTES=104857600
 JSON_BODY_LIMIT=2mb
 WS_MAX_PAYLOAD_BYTES=1048576
 WS_HEARTBEAT_MS=30000
@@ -178,6 +178,8 @@ sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/apply-app-fixes.mjs"
 sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/apply-mobile-layout-fixes.mjs"
 sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/apply-mobile-call-audio-fixes.mjs"
 sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/apply-call-reliability-fixes.mjs"
+sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/apply-call-mobile-upload-fixes.mjs"
+sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/apply-call-video-mount-fix.mjs"
 sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/harden-source.mjs"
 sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/enable-sandbox-compiler.mjs"
 

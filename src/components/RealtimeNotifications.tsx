@@ -12,6 +12,12 @@ import { getPeerConnectionConfig, playRemoteMedia, requestCallMedia, requestCame
 import { createReconnectingWebSocket } from "@/lib/reconnecting-websocket";
 import { writeOnlineUserIds } from "@/lib/realtime";
 import { useAuth } from "@/pages/AuthContext";
+import {
+  attachPersistentAudioTrack,
+  createSpeakingMonitor,
+  recoverMicrophoneTrack,
+  watchPeerConnection,
+} from "@/lib/call-audio-reliability";
 
 interface DecodedToken {
   id: number;
@@ -64,6 +70,7 @@ const RealtimeNotifications = () => {
   const screenStreamRef = useRef<MediaStream | null>(null);
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const remoteAudioRef = useRef<HTMLDivElement | null>(null);
+  const remoteVideoRef = useRef<HTMLDivElement | null>(null);
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const localScreenVideoRef = useRef<HTMLVideoElement | null>(null);
   const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
@@ -77,6 +84,7 @@ const RealtimeNotifications = () => {
   const [micEnabled, setMicEnabled] = useState(true);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [soundNeedsTap, setSoundNeedsTap] = useState(false);
+  const [speakingUserIds, setSpeakingUserIds] = useState<number[]>([]);
   const [videoEnabled, setVideoEnabled] = useState(false);
   const [screenEnabled, setScreenEnabled] = useState(false);
   const [panelHidden, setPanelHidden] = useState(false);
@@ -84,6 +92,14 @@ const RealtimeNotifications = () => {
   const [panelPosition, setPanelPosition] = useState<{ x: number; y: number } | null>(null);
   const dragOffsetRef = useRef<{ x: number; y: number } | null>(null);
   const activeCallRef = useRef<IncomingCall | null>(null);
+  // CALL_RELIABILITY: incoming audio health and speaker attribution.
+  const currentUserIdRef = useRef<number | null>(null);
+  const peerWatchdogStopRef = useRef<(() => void) | null>(null);
+  const localAudioSenderRef = useRef<RTCRtpSender | null>(null);
+  const speakingMonitorStopsRef = useRef<Record<string, () => void>>({});
+  const remoteAudioPlaybackStopsRef = useRef<Record<string, () => void>>({});
+  const blockedAudioKeysRef = useRef<Set<string>>(new Set());
+  const relayedTrackSourceRef = useRef<Record<string, number>>({});
 
   const getAvatarUrl = (avatar?: string | null) => {
     if (!avatar) return "/images/default-avatar.png";
@@ -98,6 +114,29 @@ const RealtimeNotifications = () => {
   useEffect(() => {
     activeCallRef.current = activeCall;
   }, [activeCall]);
+
+  const setParticipantSpeaking = (userId: number, speaking: boolean) => {
+    if (!Number.isFinite(Number(userId))) return;
+    setSpeakingUserIds((current) => {
+      const normalized = Number(userId);
+      if (speaking) return current.includes(normalized) ? current : [...current, normalized];
+      return current.filter((id) => id !== normalized);
+    });
+  };
+
+  const monitorSpeaking = (key: string, resolveUserId: () => number, stream: MediaStream) => {
+    if (stream.getAudioTracks().length === 0) return;
+    speakingMonitorStopsRef.current[key]?.();
+    speakingMonitorStopsRef.current[key] = createSpeakingMonitor(stream, (speaking) => {
+      setParticipantSpeaking(resolveUserId(), speaking);
+    });
+  };
+
+  const setRemotePlaybackBlocked = (key: string, blocked: boolean) => {
+    if (blocked) blockedAudioKeysRef.current.add(key);
+    else blockedAudioKeysRef.current.delete(key);
+    setSoundNeedsTap(blockedAudioKeysRef.current.size > 0);
+  };
 
   useEffect(() => {
     const handleLocalCallActive = (event: Event) => {
@@ -115,13 +154,22 @@ const RealtimeNotifications = () => {
       setVideoEnabled(detail.callKind === 'video');
     };
 
-    const handleLocalCallEnded = () => setActiveCall(null);
+    const handleLocalCallEnded = () => {
+      cleanupCall();
+      setSpeakingUserIds([]);
+    };
+    const handleLocalSpeaking = (event: Event) => {
+      const detail = (event as CustomEvent<{ userId?: number; speaking?: boolean }>).detail || {};
+      if (detail.userId !== undefined) setParticipantSpeaking(Number(detail.userId), Boolean(detail.speaking));
+    };
     window.addEventListener("itbird-call-active", handleLocalCallActive);
     window.addEventListener("itbird-call-ended", handleLocalCallEnded);
+    window.addEventListener("itbird-call-speaking", handleLocalSpeaking);
 
     return () => {
       window.removeEventListener("itbird-call-active", handleLocalCallActive);
       window.removeEventListener("itbird-call-ended", handleLocalCallEnded);
+      window.removeEventListener("itbird-call-speaking", handleLocalSpeaking);
     };
   }, []);
 
@@ -187,15 +235,25 @@ const RealtimeNotifications = () => {
   };
 
   const cleanupCall = () => {
+    peerWatchdogStopRef.current?.();
+    peerWatchdogStopRef.current = null;
     peerRef.current?.close();
     peerRef.current = null;
+    localAudioSenderRef.current = null;
     pendingIceCandidatesRef.current = [];
+    Object.values(speakingMonitorStopsRef.current).forEach((stop) => stop());
+    speakingMonitorStopsRef.current = {};
+    Object.values(remoteAudioPlaybackStopsRef.current).forEach((stop) => stop());
+    remoteAudioPlaybackStopsRef.current = {};
+    blockedAudioKeysRef.current.clear();
+    relayedTrackSourceRef.current = {};
     screenSenderRef.current = null;
     localStreamRef.current?.getTracks().forEach((track) => track.stop());
     localStreamRef.current = null;
     screenStreamRef.current?.getTracks().forEach((track) => track.stop());
     screenStreamRef.current = null;
     remoteAudioRef.current?.replaceChildren();
+    remoteVideoRef.current?.replaceChildren();
     pendingOfferRef.current = null;
     setOfferReady(false);
     stopRingtone();
@@ -204,6 +262,7 @@ const RealtimeNotifications = () => {
     setMicEnabled(true);
     setSoundEnabled(true);
     setSoundNeedsTap(false);
+    setSpeakingUserIds([]);
     setVideoEnabled(false);
     setScreenEnabled(false);
     setPanelHidden(false);
@@ -260,6 +319,34 @@ const RealtimeNotifications = () => {
     void Promise.all(media.map((element) => playRemoteMedia(element))).then((results) => {
       setSoundNeedsTap(results.some((playing) => !playing));
     });
+  };
+
+  const repairIncomingMicrophone = async () => {
+    if (!activeCallRef.current || activeCallRef.current.senderId === 0 || !peerRef.current) return;
+    try {
+      const recovered = await recoverMicrophoneTrack(localStreamRef.current, micEnabled);
+      localStreamRef.current = recovered.stream;
+      if (!recovered.recovered) return;
+
+      if (localAudioSenderRef.current) {
+        await localAudioSenderRef.current.replaceTrack(recovered.track);
+      } else {
+        localAudioSenderRef.current = peerRef.current.addTrack(recovered.track, recovered.stream);
+        if (peerRef.current.remoteDescription && peerRef.current.signalingState === 'stable') {
+          await renegotiateActivePeer();
+        }
+      }
+
+      const currentUserId = currentUserIdRef.current;
+      if (currentUserId) {
+        Object.keys(speakingMonitorStopsRef.current)
+          .filter((key) => key.startsWith('local:'))
+          .forEach((key) => { speakingMonitorStopsRef.current[key]?.(); delete speakingMonitorStopsRef.current[key]; });
+        monitorSpeaking(`local:${recovered.track.id}`, () => currentUserId, new MediaStream([recovered.track]));
+      }
+    } catch {
+      // Retry on the next watchdog/device-change event.
+    }
   };
 
   const renegotiateActivePeer = async () => {
@@ -381,38 +468,88 @@ const RealtimeNotifications = () => {
 
       const peer = new RTCPeerConnection(getPeerConnectionConfig());
       peerRef.current = peer;
-      stream.getTracks().forEach((track) => peer.addTrack(track, stream));
+      stream.getTracks().forEach((track) => {
+        const sender = peer.addTrack(track, stream);
+        if (track.kind === 'audio') localAudioSenderRef.current = sender;
+      });
+
+      const localAudioTrack = stream.getAudioTracks()[0];
+      const currentUserId = currentUserIdRef.current;
+      if (localAudioTrack && currentUserId) {
+        monitorSpeaking(`local:${localAudioTrack.id}`, () => currentUserId, new MediaStream([localAudioTrack]));
+      }
+
       peer.ontrack = (event) => {
         if (!remoteAudioRef.current) return;
-        // APP_FIX: incoming-per-stream-media
-        const remoteStream = event.streams[0];
-        const hasVideo = remoteStream?.getVideoTracks().length > 0;
-        const streamId = remoteStream?.id || (hasVideo ? 'remote-video' : 'remote-audio');
-        let media = remoteAudioRef.current.querySelector<HTMLMediaElement>(
-          `${hasVideo ? 'video' : 'audio'}[data-call-stream-id="${streamId}"]`
-        );
-        if (!media) {
-          media = document.createElement(hasVideo ? "video" : "audio");
-          media.dataset.callMedia = 'remote';
-          media.dataset.callStreamId = streamId;
-          media.autoplay = true;
-          if (hasVideo) {
-            (media as HTMLVideoElement).playsInline = true;
-            media.className = "mt-3 h-28 w-44 rounded-lg bg-black object-cover";
-          } else {
-            media.className = "hidden";
+        const remoteStream = event.streams[0] || new MediaStream([event.track]);
+
+        if (event.track.kind === 'audio') {
+          event.track.enabled = true;
+          const key = `incoming:${event.track.id}`;
+          if (!remoteAudioPlaybackStopsRef.current[key]) {
+            const binding = attachPersistentAudioTrack({
+              root: remoteAudioRef.current,
+              key,
+              track: event.track,
+              muted: !soundEnabled,
+              outputDeviceId: readSettings().audioOutputDeviceId,
+              onPlaybackBlocked: (blocked) => setRemotePlaybackBlocked(key, blocked),
+            });
+            remoteAudioPlaybackStopsRef.current[key] = binding.dispose;
           }
-          remoteAudioRef.current.appendChild(media);
+
+          const speakingKey = `speaking:${event.track.id}`;
+          if (!speakingMonitorStopsRef.current[speakingKey]) {
+            monitorSpeaking(
+              speakingKey,
+              () => relayedTrackSourceRef.current[event.track.id] || incomingCall.senderId,
+              new MediaStream([event.track]),
+            );
+          }
+          event.track.addEventListener('unmute', () => {
+            const audio = Array.from(remoteAudioRef.current?.querySelectorAll<HTMLAudioElement>('audio[data-call-audio-key]') || [])
+              .find((element) => element.dataset.callAudioKey === key);
+            if (audio) void playRemoteMedia(audio).then((playing) => setRemotePlaybackBlocked(key, !playing));
+          });
         }
-        media.muted = !soundEnabled;
-        media.srcObject = remoteStream;
-        void playRemoteMedia(media).then((playing) => setSoundNeedsTap(!playing));
+
+        if (remoteStream.getVideoTracks().length > 0) {
+          const videoRoot = remoteVideoRef.current;
+          if (videoRoot) {
+            const streamId = remoteStream.id || `remote-video-${event.track.id}`;
+            let video = videoRoot.querySelector<HTMLVideoElement>(`video[data-call-stream-id="${streamId}"]`);
+            if (!video) {
+              video = document.createElement('video');
+              video.dataset.callMedia = 'remote';
+              video.dataset.callStreamId = streamId;
+              video.autoplay = true;
+              video.playsInline = true;
+              video.muted = true;
+              video.className = 'itbird-call-remote-video rounded-lg bg-black object-cover shadow-xl';
+              videoRoot.appendChild(video);
+            }
+            video.srcObject = new MediaStream(remoteStream.getVideoTracks());
+            void video.play().catch(() => undefined);
+          }
+        }
       };
+
+      peerWatchdogStopRef.current?.();
+      peerWatchdogStopRef.current = watchPeerConnection(peer, async () => {
+        if (peer.signalingState === 'stable') await renegotiateActivePeer();
+        await repairIncomingMicrophone();
+      });
       peer.onicecandidate = (event) => {
         if (event.candidate) {
           sendCallSignal("CALL_ICE", [incomingCall.senderId], { ...incomingCall, candidate: event.candidate });
         }
       };
+
+      // CALL_VIDEO_FIX: mount-panel-before-remote-description
+      // Mount the visible call panel before setRemoteDescription can fire ontrack.
+      setActiveCall(incomingCall);
+      setIncomingCall(null);
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
 
       await peer.setRemoteDescription(new RTCSessionDescription(pendingOfferRef.current.description));
       // APP_FIX: flush-pending-ice
@@ -423,8 +560,6 @@ const RealtimeNotifications = () => {
       await peer.setLocalDescription(answer);
       sendCallSignal("CALL_ACCEPT", [incomingCall.senderId], incomingCall);
       sendCallSignal("CALL_ANSWER", [incomingCall.senderId], { ...incomingCall, description: answer });
-      setActiveCall(incomingCall);
-      setIncomingCall(null);
     } catch (error) {
       toast({ title: "Доступ к микрофону", description: getMicrophoneErrorMessage(error), variant: "destructive" });
       cleanupCall();
@@ -434,7 +569,7 @@ const RealtimeNotifications = () => {
   const declineIncomingCall = () => {
     (window as typeof window & { __itbirdActiveCallEnd?: () => void }).__itbirdActiveCallEnd?.();
     if (incomingCall) sendCallSignal("CALL_HANGUP", [incomingCall.senderId], incomingCall);
-    if (activeCall?.senderId) sendCallSignal("CALL_HANGUP", [activeCall.senderId], activeCall);
+    if (activeCall?.senderId) sendCallSignal("CALL_HANGUP", [activeCall.senderId], { ...activeCall, participantLeft: activeCall.mode === 'group' });
     cleanupCall();
   };
 
@@ -445,6 +580,7 @@ const RealtimeNotifications = () => {
     let currentUserId: number;
     try {
       currentUserId = jwtDecode<DecodedToken>(token).id;
+      currentUserIdRef.current = currentUserId;
     } catch {
       return;
     }
@@ -542,6 +678,16 @@ const RealtimeNotifications = () => {
         showDesktopNotification(title, description, openGroup);
       }
 
+      if (notification.type === 'CALL_RELAY_TRACK') {
+        const call = notification.data as IncomingCall & { sourcePeerId?: number; trackId?: string };
+        if (call.senderId === currentUserId) return;
+        if (!call.targetIds?.includes(currentUserId)) return;
+        if (call.trackId && call.sourcePeerId) {
+          relayedTrackSourceRef.current[call.trackId] = Number(call.sourcePeerId);
+        }
+        return;
+      }
+
       if (notification.type === "CALL_INVITE") {
         const call = notification.data as IncomingCall;
         if (call.senderId === currentUserId) return;
@@ -601,10 +747,14 @@ const RealtimeNotifications = () => {
       }
 
       if (notification.type === "CALL_HANGUP") {
-        const call = notification.data as IncomingCall;
+        const call = notification.data as IncomingCall & { endForAll?: boolean };
         if (call.senderId === currentUserId) return;
         if (!call.targetIds?.includes(currentUserId)) return;
-        cleanupCall();
+        if (call.mode !== 'group' || call.endForAll || call.senderId === activeCallRef.current?.senderId) {
+          cleanupCall();
+        } else {
+          setParticipantSpeaking(Number(call.senderId), false);
+        }
       }
     };
 
@@ -615,6 +765,17 @@ const RealtimeNotifications = () => {
       ringtoneContextRef.current = null;
     };
   }, [isAuthenticated, navigate, toast]);
+
+  useEffect(() => {
+    if (!activeCall || activeCall.senderId === 0) return;
+    const timer = window.setInterval(() => { void repairIncomingMicrophone(); }, 2500);
+    const handleDeviceChange = () => { void repairIncomingMicrophone(); };
+    navigator.mediaDevices?.addEventListener?.('devicechange', handleDeviceChange);
+    return () => {
+      window.clearInterval(timer);
+      navigator.mediaDevices?.removeEventListener?.('devicechange', handleDeviceChange);
+    };
+  }, [activeCall?.senderId, micEnabled]);
 
   const activeParticipants = activeCall?.participants?.length
     ? [
@@ -627,13 +788,10 @@ const RealtimeNotifications = () => {
 
   return (
     <>
-      <div
-        ref={remoteAudioRef}
-        className={activeCall && !panelHidden ? "fixed bottom-[calc(7rem+var(--mobile-safe-bottom))] right-3 z-50 flex max-w-[calc(100vw-24px)] flex-wrap justify-end gap-2 sm:right-6" : "hidden"}
-      />
+      <div ref={remoteAudioRef} className="hidden" aria-hidden="true" />
       {activeCall && panelHidden && (
         <Button
-          className="fixed bottom-[calc(1rem+var(--mobile-safe-bottom))] right-4 z-50 rounded-full bg-black/90 text-white hover:bg-black"
+          className="fixed bottom-[calc(0.75rem+var(--mobile-visible-bottom,var(--mobile-safe-bottom)))] right-4 z-50 rounded-full bg-black/90 text-white hover:bg-black"
           onClick={() => setPanelHidden(false)}
         >
           Вернуть звонок
@@ -644,7 +802,7 @@ const RealtimeNotifications = () => {
         pathnameRef.current !== (activeCall.mode === "group" ? `/group-chats/${activeCall.chatId}` : `/chats/${activeCall.chatId}`)
       ) && !panelHidden && (
         <div
-          className={`${panelPosition ? "fixed" : "fixed inset-x-2 bottom-[calc(1rem+var(--mobile-safe-bottom))] mx-auto"} z-50 flex max-h-[calc(var(--app-viewport-height)-2rem-var(--mobile-safe-bottom))] w-[min(760px,calc(100vw-16px))] flex-col gap-3 overflow-y-auto rounded-2xl border border-white/10 bg-black/95 p-3 text-white shadow-2xl sm:inset-x-4 sm:w-[min(760px,calc(100vw-24px))] sm:gap-5 sm:p-4`}
+          className={`${panelPosition ? "fixed" : "fixed inset-x-2 mx-auto"} itbird-call-panel z-50 flex max-h-[calc(var(--app-viewport-height)-2rem-var(--mobile-safe-bottom))] w-[min(760px,calc(100vw-16px))] flex-col gap-3 overflow-y-auto overflow-x-hidden rounded-2xl border border-white/10 bg-black/95 p-3 text-white shadow-2xl sm:inset-x-4 sm:w-[min(760px,calc(100vw-24px))] sm:gap-5 sm:p-4`}
           style={panelPosition ? { left: panelPosition.x, top: panelPosition.y } : undefined}
         >
           <div
@@ -660,15 +818,18 @@ const RealtimeNotifications = () => {
               </div>
             </div>
 
-            <div className="flex min-w-0 flex-wrap items-start justify-end gap-3">
+            <div className="itbird-call-participants flex min-w-0 flex-wrap items-start justify-end gap-3">
               {activeParticipants.map((participant) => (
                 <div key={participant.id || participant.username} className="flex flex-col items-center gap-1">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-full border-2 border-white/30 bg-white/90">
+                  <div className={`relative flex h-14 w-14 items-center justify-center rounded-full border-2 bg-white/90 transition-all ${speakingUserIds.includes(Number(participant.id)) ? 'border-emerald-400 ring-4 ring-emerald-400/35 shadow-[0_0_18px_rgba(52,211,153,0.45)]' : 'border-white/30'}`}>
                     <img
                       src={getAvatarUrl(participant.avatar)}
                       alt={participant.username}
                       className="h-12 w-12 rounded-full object-cover"
                     />
+                    {speakingUserIds.includes(Number(participant.id)) && (
+                      <span className="absolute -bottom-2 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-emerald-500 px-1.5 py-0.5 text-[9px] font-semibold text-black">Говорит</span>
+                    )}
                   </div>
                   <span className="max-w-24 truncate text-xs text-white/70">{participant.username}</span>
                 </div>
@@ -709,6 +870,8 @@ const RealtimeNotifications = () => {
               )}
             </div>
           )}
+
+          <div ref={remoteVideoRef} className="grid w-full min-w-0 grid-cols-1 place-items-center gap-2 sm:grid-cols-2" />
 
           {soundNeedsTap && (
             <Button type="button" variant="secondary" size="sm" onClick={forceEnableRemoteSound} className="w-full sm:w-auto">

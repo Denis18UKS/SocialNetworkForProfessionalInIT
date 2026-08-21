@@ -37,9 +37,15 @@ const useMobileVisualViewport = () => {
       const viewport = window.visualViewport;
       const visibleHeight = Math.max(320, Math.round(viewport?.height || window.innerHeight));
       const visibleTop = Math.max(0, Math.round(viewport?.offsetTop || 0));
+      const layoutHeight = Math.max(window.innerHeight, document.documentElement.clientHeight || 0);
+      const visibleBottom = Math.max(
+        0,
+        Math.min(140, Math.round(layoutHeight - visibleTop - (viewport?.height || layoutHeight))),
+      );
 
       document.documentElement.style.setProperty("--app-viewport-height", `${visibleHeight}px`);
       document.documentElement.style.setProperty("--app-viewport-top", `${visibleTop}px`);
+      document.documentElement.style.setProperty("--app-viewport-bottom", `${visibleBottom}px`);
     };
 
     updateViewport();
