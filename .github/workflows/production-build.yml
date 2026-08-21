@@ -43,6 +43,7 @@ jobs:
           node deploy/apply-mobile-call-audio-fixes.mjs
           node deploy/apply-call-reliability-fixes.mjs
           node deploy/apply-call-mobile-upload-fixes.mjs
+          node deploy/apply-call-video-mount-fix.mjs
           node deploy/harden-source.mjs --in-place
           node deploy/enable-sandbox-compiler.mjs --in-place
           node deploy/patch-installer.mjs
@@ -54,6 +55,7 @@ jobs:
           node --check deploy/apply-mobile-call-audio-fixes.mjs
           node --check deploy/apply-call-reliability-fixes.mjs
           node --check deploy/apply-call-mobile-upload-fixes.mjs
+          node --check deploy/apply-call-video-mount-fix.mjs
           node --check backend/server.js
           node --check backend/compiler-client.js
           node --check deploy/compiler-runner/server.mjs
@@ -64,6 +66,7 @@ jobs:
           bash -n deploy/install.sh
           bash -n deploy/update-live-call-mobile-upload.sh
           node deploy/apply-call-mobile-upload-fixes.mjs
+          node deploy/apply-call-video-mount-fix.mjs
           node deploy/harden-source.mjs
           node deploy/enable-sandbox-compiler.mjs
           node --check backend/server.production.js
