@@ -63,10 +63,14 @@ sudo -u "$APP_USER" git fetch origin "$BRANCH"
 echo "[2/8] Loading mail recovery files"
 sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   backend/password-recovery.js \
+  backend/compiler-client.js \
+  ecosystem.config.cjs \
   src/components/PasswordRecovery.tsx \
   deploy/apply-mail-recovery-fixes.mjs \
   deploy/configure-mail.sh \
   deploy/generate-owner-recovery-codes.mjs \
+  deploy/harden-source.mjs \
+  deploy/enable-sandbox-compiler.mjs \
   deploy/update-mail-recovery.sh
 
 echo "[3/8] Applying source fixes"
