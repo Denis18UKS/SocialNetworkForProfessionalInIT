@@ -86,6 +86,7 @@ sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   deploy/apply-mobile-call-audio-fixes.mjs \
   deploy/apply-call-reliability-fixes.mjs \
   deploy/apply-call-mobile-upload-fixes.mjs \
+  deploy/apply-call-video-mount-fix.mjs \
   deploy/harden-source.mjs \
   deploy/enable-sandbox-compiler.mjs \
   deploy/nginx-socialbird.conf.template \
@@ -93,14 +94,17 @@ sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
 
 echo "[3/10] Applying call, camera, hangup, mobile and upload fixes"
 node --check deploy/apply-call-mobile-upload-fixes.mjs
+node --check deploy/apply-call-video-mount-fix.mjs
 if ! grep -q "CALL_RELIABILITY: persistent-audio-and-health" src/components/VoiceCallControls.tsx; then
   sudo -u "$APP_USER" node deploy/apply-mobile-call-audio-fixes.mjs
   sudo -u "$APP_USER" node deploy/apply-call-reliability-fixes.mjs
 fi
 sudo -u "$APP_USER" node deploy/apply-call-mobile-upload-fixes.mjs
+sudo -u "$APP_USER" node deploy/apply-call-video-mount-fix.mjs
 
 grep -q "itbird-call-remote-video" src/components/VoiceCallControls.tsx
 grep -q "remoteVideoRef" src/components/RealtimeNotifications.tsx
+grep -q "CALL_VIDEO_FIX: mount-panel-before-remote-description" src/components/RealtimeNotifications.tsx
 grep -q "MAX_CHAT_UPLOAD_BYTES" src/pages/Chats.tsx
 grep -q "uploadChatMedia" backend/server.js
 
