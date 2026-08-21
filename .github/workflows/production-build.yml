@@ -60,9 +60,6 @@ jobs:
           node --check deploy/enable-sandbox-compiler.mjs
           node --check deploy/patch-installer.mjs
           bash -n deploy/install.sh
-          node deploy/apply-app-fixes.mjs
-          node deploy/apply-mobile-layout-fixes.mjs
-          node deploy/apply-mobile-call-audio-fixes.mjs
           node deploy/apply-call-reliability-fixes.mjs
           node deploy/harden-source.mjs
           node deploy/enable-sandbox-compiler.mjs
@@ -109,12 +106,10 @@ jobs:
             src/lib/webrtc.ts \
             src/lib/call-audio-reliability.ts \
             src/components/AppSidebar.tsx \
-            src/components/RealtimeNotifications.tsx \
-            src/components/VoiceCallControls.tsx \
             src/pages/Users.tsx \
             src/pages/Chats.tsx \
             src/pages/GroupChats.tsx
           if ! git diff --cached --quiet; then
-            git commit -m "Apply generated production application mobile and call reliability fixes"
+            git commit -m "Apply generated production application and mobile fixes"
             git push origin HEAD:${GITHUB_REF_NAME}
           fi
