@@ -65,8 +65,25 @@ patchFile('deploy/install.sh', (input) => {
   if (!source.includes('# MAIL_RECOVERY: preserve-existing-mail-settings')) {
     const marker = 'cat > "$BACKEND_ENV" <<ENV';
     if (!source.includes(marker)) throw new Error('Mail recovery fix failed: backend env marker not found');
-    const preserve = `# MAIL_RECOVERY: preserve-existing-mail-settings\nread_existing_env_value() {\n  local key="$1"\n  if [[ -f "$BACKEND_ENV" ]]; then\n    grep -m1 -E "^\\${key}=" "$BACKEND_ENV" | cut -d= -f2- || true\n  fi\n}\nEXISTING_SMTP_HOST="$(read_existing_env_value SMTP_HOST)"\nEXISTING_SMTP_PORT="$(read_existing_env_value SMTP_PORT)"\nEXISTING_SMTP_SECURE="$(read_existing_env_value SMTP_SECURE)"\nEXISTING_SMTP_USER="$(read_existing_env_value SMTP_USER)"\nEXISTING_SMTP_PASSWORD="$(read_existing_env_value SMTP_PASSWORD)"\nEXISTING_SMTP_FROM="$(read_existing_env_value SMTP_FROM)"\nEXISTING_OWNER_ADMIN_EMAIL="$(read_existing_env_value OWNER_ADMIN_EMAIL)"\n\n${marker}`;
-    source = source.replace(marker, preserve);
+    const preserveLines = [
+      '# MAIL_RECOVERY: preserve-existing-mail-settings',
+      'read_existing_env_value() {',
+      '  local key="$1"',
+      '  if [[ -f "$BACKEND_ENV" ]]; then',
+      '    grep -m1 -E "^${key}=" "$BACKEND_ENV" | cut -d= -f2- || true',
+      '  fi',
+      '}',
+      'EXISTING_SMTP_HOST="$(read_existing_env_value SMTP_HOST)"',
+      'EXISTING_SMTP_PORT="$(read_existing_env_value SMTP_PORT)"',
+      'EXISTING_SMTP_SECURE="$(read_existing_env_value SMTP_SECURE)"',
+      'EXISTING_SMTP_USER="$(read_existing_env_value SMTP_USER)"',
+      'EXISTING_SMTP_PASSWORD="$(read_existing_env_value SMTP_PASSWORD)"',
+      'EXISTING_SMTP_FROM="$(read_existing_env_value SMTP_FROM)"',
+      'EXISTING_OWNER_ADMIN_EMAIL="$(read_existing_env_value OWNER_ADMIN_EMAIL)"',
+      '',
+      marker,
+    ];
+    source = source.replace(marker, preserveLines.join('\n'));
   }
 
   source = source
