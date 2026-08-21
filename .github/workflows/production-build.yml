@@ -36,7 +36,7 @@ jobs:
             package-lock.json
             backend/package-lock.json
 
-      - name: Apply application, mobile, call-audio, reliability, live-call, upload, production, compiler and installer fixes
+      - name: Apply application, mobile, call, upload, mail, production and compiler fixes
         run: |
           node deploy/apply-app-fixes.mjs
           node deploy/apply-mobile-layout-fixes.mjs
@@ -44,6 +44,7 @@ jobs:
           node deploy/apply-call-reliability-fixes.mjs
           node deploy/apply-call-mobile-upload-fixes.mjs
           node deploy/apply-call-video-mount-fix.mjs
+          node deploy/apply-mail-recovery-fixes.mjs
           node deploy/harden-source.mjs --in-place
           node deploy/enable-sandbox-compiler.mjs --in-place
           node deploy/patch-installer.mjs
@@ -56,7 +57,10 @@ jobs:
           node --check deploy/apply-call-reliability-fixes.mjs
           node --check deploy/apply-call-mobile-upload-fixes.mjs
           node --check deploy/apply-call-video-mount-fix.mjs
+          node --check deploy/apply-mail-recovery-fixes.mjs
+          node --check deploy/generate-owner-recovery-codes.mjs
           node --check backend/server.js
+          node --check backend/password-recovery.js
           node --check backend/compiler-client.js
           node --check deploy/compiler-runner/server.mjs
           node --check deploy/compiler-sandbox/runner.mjs
@@ -65,8 +69,11 @@ jobs:
           node --check deploy/patch-installer.mjs
           bash -n deploy/install.sh
           bash -n deploy/update-live-call-mobile-upload.sh
+          bash -n deploy/update-mail-recovery.sh
+          bash -n deploy/configure-mail.sh
           node deploy/apply-call-mobile-upload-fixes.mjs
           node deploy/apply-call-video-mount-fix.mjs
+          node deploy/apply-mail-recovery-fixes.mjs
           node deploy/harden-source.mjs
           node deploy/enable-sandbox-compiler.mjs
           node --check backend/server.production.js
@@ -116,10 +123,12 @@ jobs:
             src/components/RealtimeNotifications.tsx \
             src/components/VoiceCallControls.tsx \
             src/components/VoiceMessageBubble.tsx \
+            src/components/PasswordRecovery.tsx \
+            src/pages/Login.tsx \
             src/pages/Users.tsx \
             src/pages/Chats.tsx \
             src/pages/GroupChats.tsx
           if ! git diff --cached --quiet; then
-            git commit -m "Apply generated production call mobile upload fixes"
+            git commit -m "Apply generated production mail recovery fixes"
             git push origin HEAD:${GITHUB_REF_NAME}
           fi
