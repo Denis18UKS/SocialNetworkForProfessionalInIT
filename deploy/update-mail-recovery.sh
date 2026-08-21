@@ -18,7 +18,10 @@ install -d -o root -g root -m 0750 "$BACKUP_DIR"
 backup_file() {
   local source="$1"
   local name="$2"
-  [[ -e "$source" ]] && cp -a "$source" "$BACKUP_DIR/$name"
+  if [[ -e "$source" ]]; then
+    cp -a "$source" "$BACKUP_DIR/$name"
+  fi
+  return 0
 }
 
 backup_file "$APP_DIR/backend/server.js" server.js
@@ -58,7 +61,7 @@ rollback() {
 trap rollback ERR
 
 echo "[1/8] Fetching production branch"
-sudo -u "$APP_USER" git fetch origin "$BRANCH"
+sudo -u "$APP_USER" git fetch origin "$BRANCH:refs/remotes/origin/$BRANCH"
 
 echo "[2/8] Loading mail recovery files"
 sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
