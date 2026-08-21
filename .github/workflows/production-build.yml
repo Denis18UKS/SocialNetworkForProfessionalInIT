@@ -100,6 +100,7 @@ jobs:
             deploy/install.sh \
             src/App.tsx \
             src/index.css \
+            src/components/AppSidebar.tsx \
             src/components/RealtimeNotifications.tsx \
             src/components/VoiceCallControls.tsx \
             src/pages/Users.tsx \
