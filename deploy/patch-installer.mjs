@@ -37,6 +37,8 @@ if (!source.includes('COMPILER_SOCKET=/run/socialbird-compiler/runner.sock')) {
   );
 }
 
+source = source.replace(/MAX_UPLOAD_BYTES=26214400/g, 'MAX_UPLOAD_BYTES=104857600');
+
 if (!source.includes('apply-app-fixes.mjs')) {
   replaceRequired(
     'application fixes before production hardening',
@@ -66,6 +68,22 @@ if (!source.includes('apply-call-reliability-fixes.mjs')) {
     'call reliability fixes before production hardening',
     /sudo -u \"\$APP_USER\" node \"\$\{APP_DIRECTORY\}\/deploy\/apply-mobile-call-audio-fixes\.mjs\"/,
     `sudo -u \"$APP_USER\" node \"\${APP_DIRECTORY}/deploy/apply-mobile-call-audio-fixes.mjs\"\nsudo -u \"$APP_USER\" node \"\${APP_DIRECTORY}/deploy/apply-call-reliability-fixes.mjs\"`
+  );
+}
+
+if (!source.includes('apply-call-mobile-upload-fixes.mjs')) {
+  replaceRequired(
+    'call mobile upload fixes before production hardening',
+    /sudo -u \"\$APP_USER\" node \"\$\{APP_DIRECTORY\}\/deploy\/apply-call-reliability-fixes\.mjs\"/,
+    `sudo -u \"$APP_USER\" node \"\${APP_DIRECTORY}/deploy/apply-call-reliability-fixes.mjs\"\nsudo -u \"$APP_USER\" node \"\${APP_DIRECTORY}/deploy/apply-call-mobile-upload-fixes.mjs\"`
+  );
+}
+
+if (!source.includes('apply-call-video-mount-fix.mjs')) {
+  replaceRequired(
+    'remote video mount fix before production hardening',
+    /sudo -u \"\$APP_USER\" node \"\$\{APP_DIRECTORY\}\/deploy\/apply-call-mobile-upload-fixes\.mjs\"/,
+    `sudo -u \"$APP_USER\" node \"\${APP_DIRECTORY}/deploy/apply-call-mobile-upload-fixes.mjs\"\nsudo -u \"$APP_USER\" node \"\${APP_DIRECTORY}/deploy/apply-call-video-mount-fix.mjs\"`
   );
 }
 
