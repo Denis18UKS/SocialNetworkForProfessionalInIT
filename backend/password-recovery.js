@@ -44,7 +44,8 @@ const ensureRecoverySchema = async (db) => {
 };
 
 const registerPasswordRecoveryRoutes = ({ app, db, transporter, bcrypt, crypto }) => {
-    ensureRecoverySchema(db).catch((error) => {
+    const schemaReady = ensureRecoverySchema(db);
+    schemaReady.catch((error) => {
         console.error('Password recovery schema initialization failed:', error);
     });
 
@@ -74,6 +75,7 @@ const registerPasswordRecoveryRoutes = ({ app, db, transporter, bcrypt, crypto }
         }
 
         try {
+            await schemaReady;
             const [users] = await db.query(
                 'SELECT id, email, username FROM users WHERE LOWER(email) = ? LIMIT 1',
                 [email]
@@ -156,6 +158,7 @@ const registerPasswordRecoveryRoutes = ({ app, db, transporter, bcrypt, crypto }
         }
 
         try {
+            await schemaReady;
             const [users] = await db.query('SELECT id FROM users WHERE LOWER(email) = ? LIMIT 1', [email]);
             if (users.length === 0) {
                 return res.status(400).json({ message: 'Неверный или просроченный код', code: 'RESET_CODE_INVALID' });
@@ -226,6 +229,7 @@ const registerPasswordRecoveryRoutes = ({ app, db, transporter, bcrypt, crypto }
         }
 
         try {
+            await schemaReady;
             const [users] = await db.query(
                 "SELECT id FROM users WHERE LOWER(email) = ? AND role = 'admin' LIMIT 1",
                 [ownerEmail]
