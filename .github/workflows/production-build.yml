@@ -36,10 +36,11 @@ jobs:
             package-lock.json
             backend/package-lock.json
 
-      - name: Apply application, mobile, production, compiler and installer fixes
+      - name: Apply application, mobile, call-audio, production, compiler and installer fixes
         run: |
           node deploy/apply-app-fixes.mjs
           node deploy/apply-mobile-layout-fixes.mjs
+          node deploy/apply-mobile-call-audio-fixes.mjs
           node deploy/harden-source.mjs --in-place
           node deploy/enable-sandbox-compiler.mjs --in-place
           node deploy/patch-installer.mjs
@@ -48,6 +49,7 @@ jobs:
         run: |
           node --check deploy/apply-app-fixes.mjs
           node --check deploy/apply-mobile-layout-fixes.mjs
+          node --check deploy/apply-mobile-call-audio-fixes.mjs
           node --check backend/server.js
           node --check backend/compiler-client.js
           node --check deploy/compiler-runner/server.mjs
@@ -58,6 +60,7 @@ jobs:
           bash -n deploy/install.sh
           node deploy/apply-app-fixes.mjs
           node deploy/apply-mobile-layout-fixes.mjs
+          node deploy/apply-mobile-call-audio-fixes.mjs
           node deploy/harden-source.mjs
           node deploy/enable-sandbox-compiler.mjs
           node --check backend/server.production.js
@@ -72,7 +75,7 @@ jobs:
         env:
           VITE_API_URL: https://api.31.207.74.138.nip.io
           VITE_STUN_URLS: stun:stun.l.google.com:19302
-          VITE_TURN_URLS: turn:api.31.207.74.138.nip.io:3478?transport=udp,turn:api.31.207.74.138.nip.io:3478?transport=tcp
+          VITE_TURN_URLS: turn:api.31.207.74.138.nip.io:3478?transport=udp,turn:api.31.207.74.138.nip.io:3478?transport=tcp,turns:api.31.207.74.138.nip.io:5349?transport=tcp
           VITE_TURN_USERNAME: socialbird
           VITE_TURN_CREDENTIAL: ci-placeholder-only
 
@@ -100,6 +103,7 @@ jobs:
             deploy/install.sh \
             src/App.tsx \
             src/index.css \
+            src/lib/webrtc.ts \
             src/components/AppSidebar.tsx \
             src/components/RealtimeNotifications.tsx \
             src/components/VoiceCallControls.tsx \
@@ -107,6 +111,6 @@ jobs:
             src/pages/Chats.tsx \
             src/pages/GroupChats.tsx
           if ! git diff --cached --quiet; then
-            git commit -m "Apply generated production application and mobile fixes"
+            git commit -m "Apply generated production application mobile and call fixes"
             git push origin HEAD:${GITHUB_REF_NAME}
           fi
