@@ -21,6 +21,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { getWsUrl, readSettings } from "@/lib/settings";
 import { getIceServers } from "@/lib/webrtc";
+import { getPeerConnectionConfig, playRemoteMedia, requestCallMedia, requestCameraTrack } from "@/lib/webrtc";
 import { createReconnectingWebSocket } from "@/lib/reconnecting-websocket";
 
 type CallMode = "private" | "group";
@@ -40,7 +41,7 @@ type VoiceCallControlsProps = {
   participants: CallParticipant[];
 };
 
-const iceServers: RTCConfiguration = { iceServers: getIceServers() };
+const iceServers: RTCConfiguration = getPeerConnectionConfig();
 
 type ActiveCallWindow = typeof window & {
   __itbirdActiveCallEnd?: () => void;
@@ -84,12 +85,14 @@ const attachMediaElement = (container: HTMLElement, peerId: number, stream: Medi
 
   media.muted = muted;
   media.srcObject = stream;
+  void playRemoteMedia(media);
   const outputId = readSettings().audioOutputDeviceId;
   if (outputId && "setSinkId" in media) {
     (media as HTMLMediaElement & { setSinkId: (sinkId: string) => Promise<void> })
       .setSinkId(outputId)
       .catch(() => undefined);
   }
+  return media;
 };
 
 const getMediaErrorMessage = (error: unknown) => {
@@ -118,6 +121,7 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const localScreenVideoRef = useRef<HTMLVideoElement | null>(null);
   const screenSendersRef = useRef<Record<number, RTCRtpSender>>({});
+  const pendingIceByPeerRef = useRef<Record<number, RTCIceCandidateInit[]>>({});
   const deviceTestMuteRef = useRef<{ mic: boolean; sound: boolean } | null>(null);
   const isCallingRef = useRef(false);
   const liveCallRef = useRef(false);
@@ -128,6 +132,7 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
   const [callKind, setCallKind] = useState<CallKind>("voice");
   const [micEnabled, setMicEnabled] = useState(true);
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const [soundNeedsTap, setSoundNeedsTap] = useState(false);
   const [videoEnabled, setVideoEnabled] = useState(false);
   const [screenEnabled, setScreenEnabled] = useState(false);
   const [selfParticipant, setSelfParticipant] = useState<CallParticipant | null>(null);
@@ -231,22 +236,9 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
   };
 
   const ensureLocalStream = async (kind: CallKind, forceVideoEnabled = videoEnabled) => {
-    const settings = readSettings();
     if (!localStreamRef.current) {
       try {
-        localStreamRef.current = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            ...(settings.microphoneDeviceId ? { deviceId: { exact: settings.microphoneDeviceId } } : {}),
-            echoCancellation: settings.noiseSuppressionMode === "krisp",
-            noiseSuppression: settings.noiseSuppressionMode === "krisp",
-            autoGainControl: settings.noiseSuppressionMode === "krisp",
-          },
-          video: kind === "video"
-            ? settings.cameraDeviceId
-              ? { deviceId: { exact: settings.cameraDeviceId } }
-              : true
-            : false,
-        });
+        localStreamRef.current = await requestCallMedia({ video: kind === "video" });
       } catch (error) {
         toast({ title: "Ошибка звонка", description: getMediaErrorMessage(error), variant: "destructive" });
         throw error;
@@ -268,10 +260,9 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
   };
 
   const attachRemoteStream = (peerId: number, stream: MediaStream) => {
-    if (remoteMediaRef.current) {
-      attachMediaElement(remoteMediaRef.current, peerId, stream, !soundEnabled);
-    }
-    attachMediaElement(getGlobalMediaRoot(), peerId, stream, !soundEnabled);
+    const container = remoteMediaRef.current || getGlobalMediaRoot();
+    const media = attachMediaElement(container, peerId, stream, !soundEnabled);
+    void playRemoteMedia(media).then((playing) => setSoundNeedsTap(!playing));
   };
 
   const createPeer = async (peerId: number, kind: CallKind) => {
@@ -335,23 +326,33 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
 
   const toggleSound = () => {
     const next = !soundEnabled;
-    remoteMediaRef.current?.querySelectorAll<HTMLMediaElement>("audio, video").forEach((media) => {
-      media.muted = !next;
-    });
-    getGlobalMediaRoot().querySelectorAll<HTMLMediaElement>("audio, video").forEach((media) => {
-      media.muted = !next;
-    });
+    const media = [
+      ...Array.from(remoteMediaRef.current?.querySelectorAll<HTMLMediaElement>("audio, video") || []),
+      ...Array.from(getGlobalMediaRoot().querySelectorAll<HTMLMediaElement>("audio, video")),
+    ];
+    media.forEach((element) => { element.muted = !next; });
     setSoundEnabled(next);
+    if (next) {
+      void Promise.all(media.map((element) => playRemoteMedia(element))).then((results) => {
+        setSoundNeedsTap(results.some((playing) => !playing));
+      });
+    }
+  };
+
+  const forceEnableRemoteSound = () => {
+    const media = [
+      ...Array.from(remoteMediaRef.current?.querySelectorAll<HTMLMediaElement>("audio, video") || []),
+      ...Array.from(getGlobalMediaRoot().querySelectorAll<HTMLMediaElement>("audio, video")),
+    ];
+    media.forEach((element) => { element.muted = false; });
+    setSoundEnabled(true);
+    void Promise.all(media.map((element) => playRemoteMedia(element))).then((results) => {
+      setSoundNeedsTap(results.some((playing) => !playing));
+    });
   };
 
   const addCameraTrack = async () => {
-    const settings = readSettings();
-    const cameraStream = await navigator.mediaDevices.getUserMedia({
-      video: settings.cameraDeviceId ? { deviceId: { exact: settings.cameraDeviceId } } : true,
-      audio: false,
-    });
-    const [videoTrack] = cameraStream.getVideoTracks();
-    if (!videoTrack) return;
+    const { stream: cameraStream, track: videoTrack } = await requestCameraTrack();
 
     if (!localStreamRef.current) {
       localStreamRef.current = new MediaStream();
@@ -484,6 +485,7 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
     Object.values(peersRef.current).forEach((peer) => peer.close());
     peersRef.current = {};
     screenSendersRef.current = {};
+    pendingIceByPeerRef.current = {};
     localStreamRef.current?.getTracks().forEach((track) => track.stop());
     screenStreamRef.current?.getTracks().forEach((track) => track.stop());
     localStreamRef.current = null;
@@ -544,7 +546,13 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
 
       if (payload.type === "CALL_ANSWER") {
         const peer = peersRef.current[data.senderId];
-        if (peer) await peer.setRemoteDescription(new RTCSessionDescription(data.description));
+        if (peer && data.description) {
+          await peer.setRemoteDescription(new RTCSessionDescription(data.description));
+          for (const candidate of pendingIceByPeerRef.current[data.senderId] || []) {
+            await peer.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => undefined);
+          }
+          delete pendingIceByPeerRef.current[data.senderId];
+        }
       }
 
       if (payload.type === "CALL_OFFER") {
@@ -565,7 +573,14 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
 
       if (payload.type === "CALL_ICE") {
         const peer = peersRef.current[data.senderId];
-        if (peer && data.candidate) await peer.addIceCandidate(new RTCIceCandidate(data.candidate));
+        if (peer && data.candidate) {
+          if (peer.remoteDescription) {
+            await peer.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(() => undefined);
+          } else {
+            pendingIceByPeerRef.current[data.senderId] ||= [];
+            pendingIceByPeerRef.current[data.senderId].push(data.candidate);
+          }
+        }
       }
 
       if (payload.type === "CALL_HANGUP") {
@@ -638,6 +653,12 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
                 </div>
               )}
             </div>
+          )}
+
+          {soundNeedsTap && (
+            <Button type="button" variant="secondary" size="sm" onClick={forceEnableRemoteSound} className="w-full sm:w-auto">
+              Нажмите, чтобы включить звук собеседника
+            </Button>
           )}
 
           <div className="flex flex-wrap items-center justify-center gap-2">

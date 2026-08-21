@@ -8,6 +8,7 @@ import { ToastAction } from "@/components/ui/toast";
 import { useToast } from "@/hooks/use-toast";
 import { getWsUrl, readSettings } from "@/lib/settings";
 import { getIceServers } from "@/lib/webrtc";
+import { getPeerConnectionConfig, playRemoteMedia, requestCallMedia, requestCameraTrack } from "@/lib/webrtc";
 import { createReconnectingWebSocket } from "@/lib/reconnecting-websocket";
 import { writeOnlineUserIds } from "@/lib/realtime";
 import { useAuth } from "@/pages/AuthContext";
@@ -75,6 +76,7 @@ const RealtimeNotifications = () => {
   const [offerReady, setOfferReady] = useState(false);
   const [micEnabled, setMicEnabled] = useState(true);
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const [soundNeedsTap, setSoundNeedsTap] = useState(false);
   const [videoEnabled, setVideoEnabled] = useState(false);
   const [screenEnabled, setScreenEnabled] = useState(false);
   const [panelHidden, setPanelHidden] = useState(false);
@@ -201,6 +203,7 @@ const RealtimeNotifications = () => {
     setActiveCall(null);
     setMicEnabled(true);
     setSoundEnabled(true);
+    setSoundNeedsTap(false);
     setVideoEnabled(false);
     setScreenEnabled(false);
     setPanelHidden(false);
@@ -240,10 +243,23 @@ const RealtimeNotifications = () => {
     }
 
     const next = !soundEnabled;
-    remoteAudioRef.current?.querySelectorAll<HTMLMediaElement>("audio, video").forEach((media) => {
-      media.muted = !next;
-    });
+    const media = Array.from(remoteAudioRef.current?.querySelectorAll<HTMLMediaElement>("audio, video") || []);
+    media.forEach((element) => { element.muted = !next; });
     setSoundEnabled(next);
+    if (next) {
+      void Promise.all(media.map((element) => playRemoteMedia(element))).then((results) => {
+        setSoundNeedsTap(results.some((playing) => !playing));
+      });
+    }
+  };
+
+  const forceEnableRemoteSound = () => {
+    const media = Array.from(remoteAudioRef.current?.querySelectorAll<HTMLMediaElement>("audio, video") || []);
+    media.forEach((element) => { element.muted = false; });
+    setSoundEnabled(true);
+    void Promise.all(media.map((element) => playRemoteMedia(element))).then((results) => {
+      setSoundNeedsTap(results.some((playing) => !playing));
+    });
   };
 
   const renegotiateActivePeer = async () => {
@@ -312,13 +328,7 @@ const RealtimeNotifications = () => {
 
     if (next && videoTracks.length === 0) {
       try {
-        const settings = readSettings();
-        const camera = await navigator.mediaDevices.getUserMedia({
-          video: settings.cameraDeviceId ? { deviceId: { exact: settings.cameraDeviceId } } : true,
-          audio: false,
-        });
-        const [track] = camera.getVideoTracks();
-        if (!track) return;
+        const { track } = await requestCameraTrack();
         localStreamRef.current.addTrack(track);
         peerRef.current.addTrack(track, localStreamRef.current);
         videoTracks = [track];
@@ -364,25 +374,12 @@ const RealtimeNotifications = () => {
 
     try {
       stopRingtone();
-      const settings = readSettings();
       const wantsVideo = incomingCall.callKind === "video";
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          ...(settings.microphoneDeviceId ? { deviceId: { exact: settings.microphoneDeviceId } } : {}),
-          echoCancellation: settings.noiseSuppressionMode === "krisp",
-          noiseSuppression: settings.noiseSuppressionMode === "krisp",
-          autoGainControl: settings.noiseSuppressionMode === "krisp",
-        },
-        video: wantsVideo
-          ? settings.cameraDeviceId
-            ? { deviceId: { exact: settings.cameraDeviceId } }
-            : true
-          : false,
-      });
+      const stream = await requestCallMedia({ video: wantsVideo });
       localStreamRef.current = stream;
       setVideoEnabled(wantsVideo);
 
-      const peer = new RTCPeerConnection({ iceServers: getIceServers() });
+      const peer = new RTCPeerConnection(getPeerConnectionConfig());
       peerRef.current = peer;
       stream.getTracks().forEach((track) => peer.addTrack(track, stream));
       peer.ontrack = (event) => {
@@ -407,7 +404,9 @@ const RealtimeNotifications = () => {
           }
           remoteAudioRef.current.appendChild(media);
         }
+        media.muted = !soundEnabled;
         media.srcObject = remoteStream;
+        void playRemoteMedia(media).then((playing) => setSoundNeedsTap(!playing));
       };
       peer.onicecandidate = (event) => {
         if (event.candidate) {
@@ -709,6 +708,12 @@ const RealtimeNotifications = () => {
                 </div>
               )}
             </div>
+          )}
+
+          {soundNeedsTap && (
+            <Button type="button" variant="secondary" size="sm" onClick={forceEnableRemoteSound} className="w-full sm:w-auto">
+              Нажмите, чтобы включить звук собеседника
+            </Button>
           )}
 
           <div className="flex flex-wrap items-center justify-center gap-2 border-t border-white/5 pt-5">
