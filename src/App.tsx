@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -30,7 +31,35 @@ import { AuthProvider } from "@/pages/AuthContext";
 
 const queryClient = new QueryClient();
 
+const useMobileVisualViewport = () => {
+  useEffect(() => {
+    const updateViewport = () => {
+      const viewport = window.visualViewport;
+      const visibleHeight = Math.max(320, Math.round(viewport?.height || window.innerHeight));
+      const visibleTop = Math.max(0, Math.round(viewport?.offsetTop || 0));
+
+      document.documentElement.style.setProperty("--app-viewport-height", `${visibleHeight}px`);
+      document.documentElement.style.setProperty("--app-viewport-top", `${visibleTop}px`);
+    };
+
+    updateViewport();
+    window.addEventListener("resize", updateViewport);
+    window.addEventListener("orientationchange", updateViewport);
+    window.visualViewport?.addEventListener("resize", updateViewport);
+    window.visualViewport?.addEventListener("scroll", updateViewport);
+
+    return () => {
+      window.removeEventListener("resize", updateViewport);
+      window.removeEventListener("orientationchange", updateViewport);
+      window.visualViewport?.removeEventListener("resize", updateViewport);
+      window.visualViewport?.removeEventListener("scroll", updateViewport);
+    };
+  }, []);
+};
+
 const App = () => {
+  useMobileVisualViewport();
+
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
@@ -40,7 +69,7 @@ const App = () => {
           <BrowserRouter>
             <RealtimeNotifications />
             <SidebarProvider>
-              <div className="flex h-dvh w-full overflow-hidden bg-background dark:bg-gray-950">
+              <div className="app-visual-viewport flex w-full overflow-hidden bg-background dark:bg-gray-950">
                 <AppSidebar />
                 <div className="flex min-w-0 flex-1 flex-col">
                   <Header />
