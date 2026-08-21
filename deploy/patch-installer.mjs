@@ -61,6 +61,14 @@ if (!source.includes('apply-mobile-call-audio-fixes.mjs')) {
   );
 }
 
+if (!source.includes('apply-call-reliability-fixes.mjs')) {
+  replaceRequired(
+    'call reliability fixes before production hardening',
+    /sudo -u \"\$APP_USER\" node \"\$\{APP_DIRECTORY\}\/deploy\/apply-mobile-call-audio-fixes\.mjs\"/,
+    `sudo -u \"$APP_USER\" node \"\${APP_DIRECTORY}/deploy/apply-mobile-call-audio-fixes.mjs\"\nsudo -u \"$APP_USER\" node \"\${APP_DIRECTORY}/deploy/apply-call-reliability-fixes.mjs\"`
+  );
+}
+
 if (!source.includes('enable-sandbox-compiler.mjs')) {
   replaceRequired(
     'sandbox compiler source patch',
