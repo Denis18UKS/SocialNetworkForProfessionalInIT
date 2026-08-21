@@ -45,6 +45,14 @@ if (!source.includes('apply-app-fixes.mjs')) {
   );
 }
 
+if (!source.includes('apply-mobile-layout-fixes.mjs')) {
+  replaceRequired(
+    'mobile layout fixes before production hardening',
+    /sudo -u \"\$APP_USER\" node \"\$\{APP_DIRECTORY\}\/deploy\/apply-app-fixes\.mjs\"/,
+    `sudo -u \"$APP_USER\" node \"\${APP_DIRECTORY}/deploy/apply-app-fixes.mjs\"\nsudo -u \"$APP_USER\" node \"\${APP_DIRECTORY}/deploy/apply-mobile-layout-fixes.mjs\"`
+  );
+}
+
 if (!source.includes('enable-sandbox-compiler.mjs')) {
   replaceRequired(
     'sandbox compiler source patch',
