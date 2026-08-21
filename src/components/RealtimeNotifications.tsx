@@ -630,11 +630,11 @@ const RealtimeNotifications = () => {
     <>
       <div
         ref={remoteAudioRef}
-        className={activeCall && !panelHidden ? "fixed bottom-28 right-6 z-50 flex max-w-[calc(100vw-32px)] flex-wrap justify-end gap-2" : "hidden"}
+        className={activeCall && !panelHidden ? "fixed bottom-[calc(7rem+var(--mobile-safe-bottom))] right-3 z-50 flex max-w-[calc(100vw-24px)] flex-wrap justify-end gap-2 sm:right-6" : "hidden"}
       />
       {activeCall && panelHidden && (
         <Button
-          className="fixed bottom-4 right-4 z-50 rounded-full bg-black/90 text-white hover:bg-black"
+          className="fixed bottom-[calc(1rem+var(--mobile-safe-bottom))] right-4 z-50 rounded-full bg-black/90 text-white hover:bg-black"
           onClick={() => setPanelHidden(false)}
         >
           Вернуть звонок
@@ -645,7 +645,7 @@ const RealtimeNotifications = () => {
         pathnameRef.current !== (activeCall.mode === "group" ? `/group-chats/${activeCall.chatId}` : `/chats/${activeCall.chatId}`)
       ) && !panelHidden && (
         <div
-          className={`${panelPosition ? "fixed" : "fixed inset-x-4 bottom-4 mx-auto"} z-50 flex w-[min(760px,calc(100vw-24px))] flex-col gap-5 rounded-2xl border border-white/10 bg-black/95 p-4 text-white shadow-2xl`}
+          className={`${panelPosition ? "fixed" : "fixed inset-x-2 bottom-[calc(1rem+var(--mobile-safe-bottom))] mx-auto"} z-50 flex max-h-[calc(var(--app-viewport-height)-2rem-var(--mobile-safe-bottom))] w-[min(760px,calc(100vw-16px))] flex-col gap-3 overflow-y-auto rounded-2xl border border-white/10 bg-black/95 p-3 text-white shadow-2xl sm:inset-x-4 sm:w-[min(760px,calc(100vw-24px))] sm:gap-5 sm:p-4`}
           style={panelPosition ? { left: panelPosition.x, top: panelPosition.y } : undefined}
         >
           <div

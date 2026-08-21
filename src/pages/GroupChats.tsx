@@ -973,7 +973,7 @@ const GroupChats = () => {
     }
 
     return (
-        <div className="h-full min-h-[calc(100dvh-5rem)] overflow-hidden bg-gray-50 dark:bg-gray-900">
+        <div className="h-full min-h-0 overflow-hidden bg-gray-50 dark:bg-gray-900">
             <ToastContainer position="top-right" autoClose={3000} />
             <div className="flex h-full min-h-0">
                 {/* Список групповых чатов */}
@@ -983,7 +983,7 @@ const GroupChats = () => {
                     transition={{ duration: 0.3 }}
                     className={`${selectedChat ? "hidden md:block" : "block"} h-full w-full shrink-0 border-r border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800 md:w-80`}
                 >
-                    <Card className="h-full rounded-none border-0">
+                    <Card className="flex h-full min-h-0 flex-col rounded-none border-0">
                         <CardHeader className="border-b border-gray-200 dark:border-gray-700">
                             <div className="flex justify-between items-center">
                                 <CardTitle className="text-xl">Групповые чаты</CardTitle>
@@ -1003,7 +1003,7 @@ const GroupChats = () => {
                                 className="w-full mt-2"
                             />
                         </CardHeader>
-                        <CardContent className="p-0">
+                        <CardContent className="min-h-0 flex-1 overflow-y-auto p-0">
                             <ul className="divide-y divide-gray-200 dark:divide-gray-700">
                                 {filteredChats.length === 0 ? (
                                     <li className="p-4 text-center text-gray-500">Нет групповых чатов</li>
@@ -1048,7 +1048,7 @@ const GroupChats = () => {
                         <>
                             {/* Шапка чата */}
                             <Card className="shrink-0 rounded-none border-0 border-b border-gray-200 dark:border-gray-700">
-                                <CardHeader className="py-3">
+                                <CardHeader className="shrink-0 px-3 py-2 sm:px-6 sm:py-3">
                                     <div className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                                         <div className="flex min-w-0 items-center space-x-3">
                                             <Button
@@ -1074,12 +1074,12 @@ const GroupChats = () => {
                                                 </CardDescription>
                                             </div>
                                         </div>
-                                        <div className="flex min-w-0 flex-wrap items-center gap-2 lg:justify-end">
+                                        <div className="flex min-w-0 flex-nowrap items-center gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:flex-wrap sm:overflow-visible sm:pb-0 lg:justify-end">
                                             {pinnedMessage && (
                                                 <button
                                                     type="button"
                                                     onClick={() => scrollToMessage(pinnedMessage.id)}
-                                                    className="min-w-0 max-w-[260px] rounded-md border border-[#6E59A5]/30 bg-[#6E59A5]/10 px-3 py-2 text-left transition-colors hover:bg-[#6E59A5]/15 dark:bg-[#6E59A5]/20"
+                                                    className="w-[190px] shrink-0 rounded-md border border-[#6E59A5]/30 bg-[#6E59A5]/10 px-2 py-1.5 text-left transition-colors hover:bg-[#6E59A5]/15 dark:bg-[#6E59A5]/20 sm:w-auto sm:min-w-0 sm:max-w-[260px] sm:px-3 sm:py-2"
                                                     title="Перейти к закрепленному сообщению"
                                                 >
                                                     <div className="flex items-center gap-2 text-xs font-semibold text-[#6E59A5] dark:text-purple-200">
@@ -1138,7 +1138,7 @@ const GroupChats = () => {
                             {/* Сообщения */}
                             <div
                                 ref={messagesContainerRef}
-                                className="flex-1 overflow-y-auto p-4 bg-gray-50 dark:bg-gray-900/50"
+                                className="min-h-0 flex-1 overflow-y-auto bg-gray-50 p-2 overscroll-contain dark:bg-gray-900/50 sm:p-4"
                             >
                                 <div className="max-w-3xl mx-auto space-y-4">
                                     {messages.map((msg) => (
@@ -1153,7 +1153,7 @@ const GroupChats = () => {
                                             className={`flex rounded-xl transition-shadow ${msg.user_id === currentUser?.id ? 'justify-end' : 'justify-start'} ${highlightedMessageId === msg.id ? 'ring-2 ring-[#6E59A5] ring-offset-4 ring-offset-gray-50 dark:ring-offset-gray-900/50' : ''}`}
                                         >
                                             <div
-                                                className={`max-w-[80%] rounded-lg p-3 ${msg.user_id === currentUser?.id
+                                                className={`max-w-[88%] break-words rounded-lg p-3 sm:max-w-[80%] ${msg.user_id === currentUser?.id
                                                     ? 'bg-[#6E59A5] text-white rounded-tr-none'
                                                     : 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-tl-none shadow-sm'
                                                     }`}
@@ -1355,9 +1355,9 @@ const GroupChats = () => {
                             </div>
 
                             {/* Поле ввода сообщения */}
-                            <div className="p-4 border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+                            <div className="mobile-bottom-safe shrink-0 border-t border-gray-200 bg-white px-2 pb-2 pt-2 dark:border-gray-700 dark:bg-gray-800 sm:p-4">
                                 <div className="max-w-3xl mx-auto">
-                                    <div className="flex items-end gap-2">
+                                    <div className="flex min-w-0 items-end gap-1.5 sm:gap-2">
                                         <div className="flex items-center gap-1 relative">
                                             {/* Кнопка эмодзи */}
                                             <button
@@ -1455,13 +1455,13 @@ const GroupChats = () => {
                                             />
                                         </label>
 
-                                        <div className="flex-1 relative">
+                                        <div className="relative min-w-0 flex-1">
                                             <Textarea
                                                 value={newMessage}
                                                 onChange={(e) => setNewMessage(e.target.value)}
                                                 onKeyDown={handleKeyDown}
                                                 placeholder="Напишите сообщение..."
-                                                className="min-h-[40px] max-h-[120px] resize-none pr-10"
+                                                className="min-h-[40px] max-h-[120px] min-w-0 resize-none pr-10 text-[16px]"
                                                 rows={1}
                                             />
                                         </div>
@@ -1510,7 +1510,7 @@ const GroupChats = () => {
                                 animate={{ opacity: 1, y: 0 }}
                                 exit={{ opacity: 0, y: 20 }}
                                 onClick={scrollToBottom}
-                                className="fixed right-8 bottom-24 bg-[#6E59A5] hover:bg-[#5a4a8a] text-white p-2 rounded-full shadow-lg"
+                                className="fixed right-3 bottom-[calc(5.5rem+var(--mobile-safe-bottom))] bg-[#6E59A5] hover:bg-[#5a4a8a] text-white p-2 rounded-full shadow-lg sm:right-8 sm:bottom-[calc(6rem+var(--mobile-safe-bottom))]"
                             >
                                 <ChevronUp className="w-5 h-5 rotate-180" />
                             </motion.button>

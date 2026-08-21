@@ -101,7 +101,7 @@ export function AppSidebar() {
 
   return (
     <Sidebar className="border-r border-border bg-background shadow-md dark:bg-gray-950">
-      <SidebarContent className="min-w-0 overflow-y-auto">
+      <SidebarContent className="mobile-bottom-safe min-w-0 overflow-y-auto">
         <div className="px-5 py-6">
           <h1 className="truncate text-3xl font-extrabold tracking-tight text-primary">IT-BIRD</h1>
         </div>

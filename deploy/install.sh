@@ -175,6 +175,7 @@ chown "$APP_USER:$APP_GROUP" "${APP_DIRECTORY}/.env.production"
 chmod 0600 "${APP_DIRECTORY}/.env.production"
 
 sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/apply-app-fixes.mjs"
+sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/apply-mobile-layout-fixes.mjs"
 sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/harden-source.mjs"
 sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/enable-sandbox-compiler.mjs"
 

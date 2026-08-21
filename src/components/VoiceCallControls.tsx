@@ -55,7 +55,7 @@ const getGlobalMediaRoot = () => {
   if (!root) {
     root = document.createElement("div");
     root.id = "itbird-global-call-media";
-    root.className = "fixed bottom-28 right-6 z-[60] flex max-w-[calc(100vw-32px)] flex-wrap justify-end gap-2";
+    root.className = "fixed bottom-[calc(7rem+var(--mobile-safe-bottom))] right-3 z-[60] flex max-w-[calc(100vw-24px)] flex-wrap justify-end gap-2 sm:right-6";
     document.body.appendChild(root);
   }
   return root;
@@ -601,7 +601,7 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
           {callButton("video")}
         </div>
       ) : (
-        <div className="fixed inset-x-0 bottom-4 z-50 mx-auto flex w-[min(760px,calc(100vw-24px))] flex-col items-center gap-4 rounded-2xl border border-white/10 bg-black/90 p-4 text-white shadow-2xl">
+        <div className="fixed inset-x-0 bottom-[calc(1rem+var(--mobile-safe-bottom))] z-50 mx-auto flex max-h-[calc(var(--app-viewport-height)-2rem-var(--mobile-safe-bottom))] w-[min(760px,calc(100vw-16px))] flex-col items-center gap-3 overflow-y-auto rounded-2xl border border-white/10 bg-black/90 p-3 text-white shadow-2xl sm:w-[min(760px,calc(100vw-24px))] sm:gap-4 sm:p-4">
           <div className="flex w-full items-center justify-between gap-3">
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold">{title}</div>
