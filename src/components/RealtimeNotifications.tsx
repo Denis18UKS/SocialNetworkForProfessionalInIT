@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { jwtDecode } from "jwt-decode";
-import { ChevronDown, Headphones, Mic, MicOff, Minus, PhoneCall, PhoneOff, Pin, ScreenShare, ScreenShareOff, Video, Volume2, VolumeX } from "lucide-react";
+import { ChevronDown, Headphones, Mic, MicOff, Minus, PhoneCall, PhoneOff, Pin, ScreenShare, ScreenShareOff, Video, VideoOff, Volume2, VolumeX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ToastAction } from "@/components/ui/toast";
@@ -63,6 +63,10 @@ const RealtimeNotifications = () => {
   const screenStreamRef = useRef<MediaStream | null>(null);
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const remoteAudioRef = useRef<HTMLDivElement | null>(null);
+  const localVideoRef = useRef<HTMLVideoElement | null>(null);
+  const localScreenVideoRef = useRef<HTMLVideoElement | null>(null);
+  const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+  const screenSenderRef = useRef<RTCRtpSender | null>(null);
   const pendingOfferRef = useRef<IncomingCall | null>(null);
   const ringtoneContextRef = useRef<AudioContext | null>(null);
   const ringtoneTimerRef = useRef<number | null>(null);
@@ -71,6 +75,7 @@ const RealtimeNotifications = () => {
   const [offerReady, setOfferReady] = useState(false);
   const [micEnabled, setMicEnabled] = useState(true);
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const [videoEnabled, setVideoEnabled] = useState(false);
   const [screenEnabled, setScreenEnabled] = useState(false);
   const [panelHidden, setPanelHidden] = useState(false);
   const [panelPinned, setPanelPinned] = useState(true);
@@ -104,6 +109,8 @@ const RealtimeNotifications = () => {
         callKind: detail.callKind || "voice",
         participants: detail.participants || [],
       });
+      // APP_FIX: outgoing-call-video-state
+      setVideoEnabled(detail.callKind === 'video');
     };
 
     const handleLocalCallEnded = () => setActiveCall(null);
@@ -180,6 +187,8 @@ const RealtimeNotifications = () => {
   const cleanupCall = () => {
     peerRef.current?.close();
     peerRef.current = null;
+    pendingIceCandidatesRef.current = [];
+    screenSenderRef.current = null;
     localStreamRef.current?.getTracks().forEach((track) => track.stop());
     localStreamRef.current = null;
     screenStreamRef.current?.getTracks().forEach((track) => track.stop());
@@ -192,9 +201,22 @@ const RealtimeNotifications = () => {
     setActiveCall(null);
     setMicEnabled(true);
     setSoundEnabled(true);
+    setVideoEnabled(false);
     setScreenEnabled(false);
     setPanelHidden(false);
   };
+
+  // APP_FIX: incoming-local-preview-sync
+  useEffect(() => {
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = localStreamRef.current;
+      localVideoRef.current.play().catch(() => undefined);
+    }
+    if (localScreenVideoRef.current) {
+      localScreenVideoRef.current.srcObject = screenStreamRef.current;
+      localScreenVideoRef.current.play().catch(() => undefined);
+    }
+  }, [activeCall, videoEnabled, screenEnabled]);
 
   const toggleMic = () => {
     if (activeCall?.senderId === 0) {
@@ -231,6 +253,19 @@ const RealtimeNotifications = () => {
     sendCallSignal("CALL_OFFER", [activeCall.senderId], { ...activeCall, description: offer, isRenegotiation: true });
   };
 
+  // APP_FIX: incoming-screen-track-lifecycle
+  const stopIncomingScreenShare = async () => {
+    if (peerRef.current && screenSenderRef.current && peerRef.current.signalingState !== 'closed') {
+      try { peerRef.current.removeTrack(screenSenderRef.current); } catch {}
+    }
+    screenSenderRef.current = null;
+    screenStreamRef.current?.getTracks().forEach((track) => track.stop());
+    screenStreamRef.current = null;
+    if (localScreenVideoRef.current) localScreenVideoRef.current.srcObject = null;
+    setScreenEnabled(false);
+    await renegotiateActivePeer();
+  };
+
   const toggleScreenShare = async () => {
     if (activeCall?.senderId === 0) {
       (window as typeof window & { __itbirdActiveCallToggleScreen?: () => void }).__itbirdActiveCallToggleScreen?.();
@@ -239,9 +274,7 @@ const RealtimeNotifications = () => {
     }
 
     if (screenEnabled) {
-      screenStreamRef.current?.getTracks().forEach((track) => track.stop());
-      screenStreamRef.current = null;
-      setScreenEnabled(false);
+      await stopIncomingScreenShare();
       return;
     }
 
@@ -249,23 +282,56 @@ const RealtimeNotifications = () => {
 
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      const [track] = stream.getVideoTracks();
+      if (!track) return;
       screenStreamRef.current = stream;
-      stream.getTracks().forEach((track) => {
-        peerRef.current?.addTrack(track, stream);
-        track.onended = () => setScreenEnabled(false);
-      });
+      screenSenderRef.current = peerRef.current.addTrack(track, stream);
+      track.onended = () => { void stopIncomingScreenShare(); };
       setScreenEnabled(true);
+      if (localScreenVideoRef.current) {
+        localScreenVideoRef.current.srcObject = stream;
+        localScreenVideoRef.current.play().catch(() => undefined);
+      }
       await renegotiateActivePeer();
     } catch {
-      toast({ title: "Демонстрация экрана", description: "Не удалось начать демонстрацию экрана", variant: "destructive" });
+      toast({ title: 'Демонстрация экрана', description: 'Не удалось начать демонстрацию экрана', variant: 'destructive' });
     }
   };
 
-  const toggleVideo = () => {
+  const toggleVideo = async () => {
     if (activeCall?.senderId === 0) {
       (window as typeof window & { __itbirdActiveCallToggleVideo?: () => void }).__itbirdActiveCallToggleVideo?.();
-      setActiveCall((current) => current ? { ...current, callKind: "video" } : current);
+      setVideoEnabled((current) => !current);
+      setActiveCall((current) => current ? { ...current, callKind: 'video' } : current);
+      return;
     }
+
+    if (!peerRef.current || !localStreamRef.current) return;
+    const next = !videoEnabled;
+    let videoTracks = localStreamRef.current.getVideoTracks();
+
+    if (next && videoTracks.length === 0) {
+      try {
+        const settings = readSettings();
+        const camera = await navigator.mediaDevices.getUserMedia({
+          video: settings.cameraDeviceId ? { deviceId: { exact: settings.cameraDeviceId } } : true,
+          audio: false,
+        });
+        const [track] = camera.getVideoTracks();
+        if (!track) return;
+        localStreamRef.current.addTrack(track);
+        peerRef.current.addTrack(track, localStreamRef.current);
+        videoTracks = [track];
+        await renegotiateActivePeer();
+      } catch (error) {
+        toast({ title: 'Камера', description: getMicrophoneErrorMessage(error), variant: 'destructive' });
+        return;
+      }
+    }
+
+    videoTracks.forEach((track) => { track.enabled = next; });
+    setVideoEnabled(next);
+    if (next) setActiveCall((current) => current ? { ...current, callKind: 'video' } : current);
   };
 
   const handlePanelPointerDown = (event: PointerEvent<HTMLDivElement>) => {
@@ -314,17 +380,24 @@ const RealtimeNotifications = () => {
           : false,
       });
       localStreamRef.current = stream;
+      setVideoEnabled(wantsVideo);
 
       const peer = new RTCPeerConnection({ iceServers: getIceServers() });
       peerRef.current = peer;
       stream.getTracks().forEach((track) => peer.addTrack(track, stream));
       peer.ontrack = (event) => {
         if (!remoteAudioRef.current) return;
-        const hasVideo = event.streams[0]?.getVideoTracks().length > 0;
-        let media = remoteAudioRef.current.querySelector<HTMLMediaElement>(hasVideo ? "video[data-call-media='remote']" : "audio[data-call-media='remote']");
+        // APP_FIX: incoming-per-stream-media
+        const remoteStream = event.streams[0];
+        const hasVideo = remoteStream?.getVideoTracks().length > 0;
+        const streamId = remoteStream?.id || (hasVideo ? 'remote-video' : 'remote-audio');
+        let media = remoteAudioRef.current.querySelector<HTMLMediaElement>(
+          `${hasVideo ? 'video' : 'audio'}[data-call-stream-id="${streamId}"]`
+        );
         if (!media) {
           media = document.createElement(hasVideo ? "video" : "audio");
-          media.dataset.callMedia = "remote";
+          media.dataset.callMedia = 'remote';
+          media.dataset.callStreamId = streamId;
           media.autoplay = true;
           if (hasVideo) {
             (media as HTMLVideoElement).playsInline = true;
@@ -334,7 +407,7 @@ const RealtimeNotifications = () => {
           }
           remoteAudioRef.current.appendChild(media);
         }
-        media.srcObject = event.streams[0];
+        media.srcObject = remoteStream;
       };
       peer.onicecandidate = (event) => {
         if (event.candidate) {
@@ -343,6 +416,10 @@ const RealtimeNotifications = () => {
       };
 
       await peer.setRemoteDescription(new RTCSessionDescription(pendingOfferRef.current.description));
+      // APP_FIX: flush-pending-ice
+      for (const candidate of pendingIceCandidatesRef.current.splice(0)) {
+        await peer.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => undefined);
+      }
       const answer = await peer.createAnswer();
       await peer.setLocalDescription(answer);
       sendCallSignal("CALL_ACCEPT", [incomingCall.senderId], incomingCall);
@@ -445,6 +522,14 @@ const RealtimeNotifications = () => {
         showDesktopNotification(title, description, openRequests);
       }
 
+      // APP_FIX: friendship-live-update
+      if (notification.type === 'FRIENDSHIP_CHANGED') {
+        const payload = notification.data || {};
+        if (payload.targetIds?.includes(currentUserId)) {
+          window.dispatchEvent(new CustomEvent('itbird-friendship-changed', { detail: payload }));
+        }
+      }
+
       if (notification.type === "NEW_GROUP_CHAT" || notification.type === "NEW_GROUP_MEMBER") {
         const payload = notification.data || {};
         const memberIds = payload.memberIds || [];
@@ -497,8 +582,13 @@ const RealtimeNotifications = () => {
         const call = notification.data as IncomingCall;
         if (call.senderId === currentUserId) return;
         if (!call.targetIds?.includes(currentUserId)) return;
-        if (peerRef.current && call.candidate) {
-          peerRef.current.addIceCandidate(new RTCIceCandidate(call.candidate)).catch(() => undefined);
+        // APP_FIX: queue-early-ice
+        if (call.candidate) {
+          if (peerRef.current?.remoteDescription) {
+            peerRef.current.addIceCandidate(new RTCIceCandidate(call.candidate)).catch(() => undefined);
+          } else {
+            pendingIceCandidatesRef.current.push(call.candidate);
+          }
         }
       }
 
@@ -602,6 +692,24 @@ const RealtimeNotifications = () => {
               </Button>
             </div>
           </div>
+
+          {/* APP_FIX: incoming-self-preview-ui */}
+          {(videoEnabled || screenEnabled) && activeCall.senderId !== 0 && (
+            <div className="flex w-full flex-wrap justify-center gap-3">
+              {videoEnabled && (
+                <div className="space-y-1 text-center">
+                  <div className="text-[11px] text-white/60">Вы — камера</div>
+                  <video ref={localVideoRef} autoPlay muted playsInline className="h-28 w-44 rounded-lg bg-gray-950 object-cover" />
+                </div>
+              )}
+              {screenEnabled && (
+                <div className="space-y-1 text-center">
+                  <div className="text-[11px] text-white/60">Вы — демонстрация экрана</div>
+                  <video ref={localScreenVideoRef} autoPlay muted playsInline className="h-28 w-44 rounded-lg bg-gray-950 object-contain" />
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="flex flex-wrap items-center justify-center gap-2 border-t border-white/5 pt-5">
             <div className="flex overflow-hidden rounded-lg border border-white/10 bg-white/10">

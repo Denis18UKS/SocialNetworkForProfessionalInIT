@@ -5,7 +5,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { jwtDecode as jwt_decode } from "jwt-decode";
 import { Input } from "@/components/ui/input";
 import { motion, AnimatePresence } from "framer-motion";
-import { Search, UserPlus, User, Clock } from "lucide-react";
+import { Search, UserPlus, User, Clock, UserMinus } from "lucide-react";
 import { readOnlineUserIds, subscribeOnlineUserIds } from "@/lib/realtime";
 
 interface User {
@@ -92,6 +92,27 @@ const Users: React.FC = () => {
         return subscribeOnlineUserIds(applyOnlineUsers);
     }, []);
 
+    // APP_FIX: live-friendship-state
+    useEffect(() => {
+        const handleFriendshipChanged = (event: Event) => {
+            const token = localStorage.getItem('token');
+            if (!token) return;
+            try {
+                const currentUserId = Number((jwt_decode(token) as { id: number }).id);
+                const detail = (event as CustomEvent<{ userId: number; friendId: number; status: User['friendshipStatus'] }>).detail;
+                const otherUserId = Number(detail.userId) === currentUserId ? Number(detail.friendId) : Number(detail.userId);
+                if (!otherUserId) return;
+                setUsers((current) => current.map((user) =>
+                    user.id === otherUserId ? { ...user, friendshipStatus: detail.status } : user
+                ));
+            } catch {
+                // Ignore malformed local auth state.
+            }
+        };
+        window.addEventListener('itbird-friendship-changed', handleFriendshipChanged);
+        return () => window.removeEventListener('itbird-friendship-changed', handleFriendshipChanged);
+    }, []);
+
     const filteredUsers = users.filter((user) => {
         const matchesSearch =
             user.username.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -144,6 +165,28 @@ const Users: React.FC = () => {
                 description: "Ошибка при добавлении в друзья",
                 variant: "destructive",
             });
+        }
+    };
+
+    // APP_FIX: remove-friend-action
+    const removeFriend = async (userId: number) => {
+        try {
+            const token = localStorage.getItem('token');
+            const response = await fetch(`http://localhost:5000/friends/${userId}`, {
+                method: 'DELETE',
+                headers: { Authorization: `Bearer ${token}` },
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                toast({ title: 'Ошибка', description: data.message || 'Не удалось удалить из друзей', variant: 'destructive' });
+                return;
+            }
+            setUsers((current) => current.map((user) =>
+                user.id === userId ? { ...user, friendshipStatus: 'none' } : user
+            ));
+            toast({ title: 'Готово', description: 'Пользователь удален из друзей' });
+        } catch {
+            toast({ title: 'Ошибка', description: 'Не удалось удалить из друзей', variant: 'destructive' });
         }
     };
 
@@ -260,6 +303,15 @@ const Users: React.FC = () => {
                                                 >
                                                     <Clock className="h-4 w-4 mr-2" />
                                                     Заявка отправлена
+                                                </Button>
+                                            ) : user.friendshipStatus === "accepted" ? (
+                                                <Button
+                                                    variant="outline"
+                                                    className="border-red-300 text-red-600 hover:bg-red-50 dark:border-red-900 dark:text-red-300 dark:hover:bg-red-950/30"
+                                                    onClick={() => removeFriend(user.id)}
+                                                >
+                                                    <UserMinus className="h-4 w-4 mr-2" />
+                                                    Удалить из друзей
                                                 </Button>
                                             ) : null}
                                         </div>

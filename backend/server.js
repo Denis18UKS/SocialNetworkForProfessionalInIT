@@ -1208,28 +1208,24 @@ app.get("/users", async (req, res) => {
             "SELECT id, username, user_tag, github_username, avatar, skills FROM users WHERE id != ? ",
             [userId]
         );
+        // APP_FIX: friendship-status-bidirectional
+        const [friendships] = await db.query(
+            `SELECT
+                CASE WHEN f.user_id = ? THEN f.friend_id ELSE f.user_id END AS other_user_id,
+                f.status
+             FROM friends f
+             WHERE f.user_id = ? OR f.friend_id = ?`,
+            [userId, userId, userId]
+        );
 
-        // Получаем статус дружбы для каждого пользователя
-        const friendStatusQuery = `
-            SELECT friend_id, status 
-            FROM friends 
-            WHERE user_id = ? AND friend_id IN (?);
-        `;
-        const friendStatusResult = await db.query(friendStatusQuery, [
-            userId,
-            users.map(user => user.id),
-        ]);
+        const friendshipByUserId = new Map(
+            friendships.map((friendship) => [Number(friendship.other_user_id), friendship.status])
+        );
 
-        // Обновляем список пользователей с соответствующим статусом дружбы
-        const usersWithStatus = users.map(user => {
-            const friendship = friendStatusResult.find(status => status.friend_id === user.id);
-            if (friendship) {
-                user.friendshipStatus = friendship.status;
-            } else {
-                user.friendshipStatus = "none"; // Если нет записи, то статус "none"
-            }
-            return user;
-        });
+        const usersWithStatus = users.map((user) => ({
+            ...user,
+            friendshipStatus: friendshipByUserId.get(Number(user.id)) || 'none',
+        }));
 
         res.json(usersWithStatus);
 
@@ -1629,6 +1625,38 @@ app.get("/friends", async (req, res) => {
     }
 });
 
+// APP_FIX: remove-friend-route
+app.delete('/friends/:friendId', verifyToken, async (req, res) => {
+    const userId = Number(req.user.id);
+    const friendId = Number(req.params.friendId);
+
+    if (!friendId || friendId === userId) {
+        return res.status(400).json({ message: 'Некорректный пользователь' });
+    }
+
+    try {
+        const [result] = await db.query(
+            `DELETE FROM friends
+             WHERE status = 'accepted'
+               AND ((user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?))`,
+            [userId, friendId, friendId, userId]
+        );
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ message: 'Дружба не найдена' });
+        }
+
+        notifyClients({
+            type: 'FRIENDSHIP_CHANGED',
+            data: { targetIds: [userId, friendId], userId, friendId, status: 'none' },
+        });
+        res.json({ message: 'Пользователь удален из друзей', friendshipStatus: 'none' });
+    } catch (error) {
+        console.error('Ошибка при удалении из друзей:', error);
+        res.status(500).json({ message: 'Ошибка сервера' });
+    }
+});
+
 // Получение заявки в друзья
 app.get('/friend-requests', async (req, res) => {
     const token = req.headers.authorization?.split(" ")[1];
@@ -1680,7 +1708,7 @@ app.patch("/friend-requests/accept/:friendId", async (req, res) => {
 
         // Обновляем статус на "accepted"
         const [result] = await db.query(
-            "UPDATE friends SET status = 'accepted' WHERE user_id = ? AND friend_id = ? OR user_id = ? AND friend_id = ?",
+            "UPDATE friends SET status = 'accepted' WHERE status = 'pending' AND ((user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?))",
             [userId, friendId, friendId, userId]
         );
 
@@ -1688,7 +1716,18 @@ app.patch("/friend-requests/accept/:friendId", async (req, res) => {
             return res.status(404).json({ message: "Заявка не найдена" });
         }
 
-        res.json({ message: "Заявка принята" });
+        // APP_FIX: friend-accept-notification
+        notifyClients({
+            type: 'FRIENDSHIP_CHANGED',
+            data: {
+                targetIds: [Number(userId), Number(friendId)],
+                userId: Number(userId),
+                friendId: Number(friendId),
+                status: 'accepted',
+            },
+        });
+
+        res.json({ message: "Заявка принята", friendshipStatus: 'accepted' });
 
     } catch (error) {
         console.error("Ошибка при принятии заявки:", error);
@@ -3256,13 +3295,15 @@ app.get('/hackathons', async (req, res) => {
         });
     }
 
-    const browser = await puppeteer.launch({
-        headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    });
-    const page = await browser.newPage();
+    // APP_FIX: hackathons-safe-browser
+    let browser = null;
 
     try {
+        browser = await puppeteer.launch({
+            headless: true,
+            args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        });
+        const page = await browser.newPage();
         await page.goto('https://hackathons.pro/', { waitUntil: 'networkidle2', timeout: 60000 });
 
         await page.evaluate(async () => {
@@ -3379,9 +3420,15 @@ app.get('/hackathons', async (req, res) => {
                 stale: true,
             });
         }
-        res.status(500).json({ message: 'Ошибка при загрузке данных' });
+        const browserUnavailable = /Could not find Chrome|Failed to launch|browser executable/i.test(String(err?.message || err));
+        res.status(browserUnavailable ? 503 : 500).json({
+            message: browserUnavailable
+                ? 'Сервис хакатонов временно недоступен: браузер-парсер не установлен.'
+                : 'Ошибка при загрузке данных',
+            code: browserUnavailable ? 'HACKATHON_BROWSER_UNAVAILABLE' : 'HACKATHON_FETCH_FAILED',
+        });
     } finally {
-        await browser.close();
+        if (browser) await browser.close().catch(() => undefined);
     }
 });
 

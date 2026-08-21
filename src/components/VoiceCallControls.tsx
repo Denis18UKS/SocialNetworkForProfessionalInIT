@@ -62,13 +62,16 @@ const getGlobalMediaRoot = () => {
 };
 
 const attachMediaElement = (container: HTMLElement, peerId: number, stream: MediaStream, muted: boolean) => {
+  // APP_FIX: per-stream-media-elements
   const hasVideo = stream.getVideoTracks().length > 0;
-  const selector = hasVideo ? `video[data-peer-id="${peerId}"]` : `audio[data-peer-id="${peerId}"]`;
+  const streamId = stream.id || `peer-${peerId}-${hasVideo ? 'video' : 'audio'}`;
+  const selector = `${hasVideo ? 'video' : 'audio'}[data-peer-id="${peerId}"][data-stream-id="${streamId}"]`;
   let media = container.querySelector<HTMLMediaElement>(selector);
 
   if (!media) {
     media = document.createElement(hasVideo ? "video" : "audio");
     media.dataset.peerId = String(peerId);
+    media.dataset.streamId = streamId;
     media.autoplay = true;
     if (hasVideo) {
       (media as HTMLVideoElement).playsInline = true;
@@ -113,6 +116,8 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
   const peersRef = useRef<Record<number, RTCPeerConnection>>({});
   const remoteMediaRef = useRef<HTMLDivElement | null>(null);
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
+  const localScreenVideoRef = useRef<HTMLVideoElement | null>(null);
+  const screenSendersRef = useRef<Record<number, RTCRtpSender>>({});
   const deviceTestMuteRef = useRef<{ mic: boolean; sound: boolean } | null>(null);
   const isCallingRef = useRef(false);
   const liveCallRef = useRef(false);
@@ -199,6 +204,18 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
     isCallingRef.current = isCalling;
   }, [isCalling]);
 
+  // APP_FIX: local-preview-sync
+  useEffect(() => {
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = localStreamRef.current;
+      localVideoRef.current.play().catch(() => undefined);
+    }
+    if (localScreenVideoRef.current) {
+      localScreenVideoRef.current.srcObject = screenStreamRef.current;
+      localScreenVideoRef.current.play().catch(() => undefined);
+    }
+  }, [isCalling, videoEnabled, screenEnabled]);
+
   const sendSignal = (type: string, targetIds: number[], data: Record<string, unknown>) => {
     const self = selfParticipantRef.current || selfParticipant;
     const callParticipants = [
@@ -208,7 +225,8 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
     socketRef.current?.send(JSON.stringify({
       type,
       targetIds,
-      data: { ...data, chatId, mode, title, callKind, callerName: self?.username, participants: callParticipants },
+      // APP_FIX: explicit-call-kind-wins
+      data: { chatId, mode, title, callKind, callerName: self?.username, participants: callParticipants, ...data },
     }));
   };
 
@@ -259,7 +277,8 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
   const createPeer = async (peerId: number, kind: CallKind) => {
     if (peersRef.current[peerId]) return peersRef.current[peerId];
 
-    const stream = await ensureLocalStream(kind);
+    // APP_FIX: keep-initial-video-enabled
+    const stream = await ensureLocalStream(kind, kind === 'video' ? true : videoEnabled);
     const peer = new RTCPeerConnection(iceServers);
     stream.getTracks().forEach((track) => peer.addTrack(track, stream));
 
@@ -369,25 +388,49 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
     }
   };
 
+  // APP_FIX: removable-screen-track
+  const stopScreenShare = async () => {
+    const senders = screenSendersRef.current;
+    for (const [peerId, sender] of Object.entries(senders)) {
+      const peer = peersRef.current[Number(peerId)];
+      if (peer && peer.signalingState !== 'closed') {
+        try { peer.removeTrack(sender); } catch {}
+      }
+    }
+    screenSendersRef.current = {};
+    screenStreamRef.current?.getTracks().forEach((track) => track.stop());
+    screenStreamRef.current = null;
+    if (localScreenVideoRef.current) localScreenVideoRef.current.srcObject = null;
+    setScreenEnabled(false);
+    await Promise.all(Object.keys(peersRef.current).map((id) => renegotiate(Number(id))));
+  };
+
   const toggleScreenShare = async () => {
     if (screenEnabled) {
-      screenStreamRef.current?.getTracks().forEach((track) => track.stop());
-      screenStreamRef.current = null;
-      setScreenEnabled(false);
+      await stopScreenShare();
       return;
     }
 
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      const [track] = stream.getVideoTracks();
+      if (!track) return;
       screenStreamRef.current = stream;
-      stream.getTracks().forEach((track) => {
-        Object.values(peersRef.current).forEach((peer) => peer.addTrack(track, stream));
-        track.onended = () => setScreenEnabled(false);
-      });
+      screenSendersRef.current = {};
+
+      for (const [peerId, peer] of Object.entries(peersRef.current)) {
+        screenSendersRef.current[Number(peerId)] = peer.addTrack(track, stream);
+      }
+
+      track.onended = () => { void stopScreenShare(); };
       setScreenEnabled(true);
+      if (localScreenVideoRef.current) {
+        localScreenVideoRef.current.srcObject = stream;
+        localScreenVideoRef.current.play().catch(() => undefined);
+      }
       await Promise.all(Object.keys(peersRef.current).map((id) => renegotiate(Number(id))));
     } catch {
-      toast({ title: "Демонстрация экрана", description: "Не удалось начать демонстрацию экрана", variant: "destructive" });
+      toast({ title: 'Демонстрация экрана', description: 'Не удалось начать демонстрацию экрана', variant: 'destructive' });
     }
   };
 
@@ -440,6 +483,7 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
     if (targetIds.length > 0) sendSignal("CALL_HANGUP", targetIds, {});
     Object.values(peersRef.current).forEach((peer) => peer.close());
     peersRef.current = {};
+    screenSendersRef.current = {};
     localStreamRef.current?.getTracks().forEach((track) => track.stop());
     screenStreamRef.current?.getTracks().forEach((track) => track.stop());
     localStreamRef.current = null;
@@ -578,8 +622,22 @@ const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }:
             </div>
           </div>
 
-          {callKind === "video" && (
-            <video ref={localVideoRef} autoPlay muted playsInline className="h-28 w-44 rounded-lg bg-gray-950 object-cover" />
+          {/* APP_FIX: self-video-and-screen-preview */}
+          {(videoEnabled || screenEnabled) && (
+            <div className="flex w-full flex-wrap justify-center gap-3">
+              {videoEnabled && (
+                <div className="space-y-1 text-center">
+                  <div className="text-[11px] text-white/60">Вы — камера</div>
+                  <video ref={localVideoRef} autoPlay muted playsInline className="h-28 w-44 rounded-lg bg-gray-950 object-cover" />
+                </div>
+              )}
+              {screenEnabled && (
+                <div className="space-y-1 text-center">
+                  <div className="text-[11px] text-white/60">Вы — демонстрация экрана</div>
+                  <video ref={localScreenVideoRef} autoPlay muted playsInline className="h-28 w-44 rounded-lg bg-gray-950 object-contain" />
+                </div>
+              )}
+            </div>
           )}
 
           <div className="flex flex-wrap items-center justify-center gap-2">

@@ -174,11 +174,17 @@ ENV
 chown "$APP_USER:$APP_GROUP" "${APP_DIRECTORY}/.env.production"
 chmod 0600 "${APP_DIRECTORY}/.env.production"
 
+sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/apply-app-fixes.mjs"
 sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/harden-source.mjs"
 sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/enable-sandbox-compiler.mjs"
 
 sudo -u "$APP_USER" bash -lc "cd '${APP_DIRECTORY}' && npm ci && npm run build"
 sudo -u "$APP_USER" bash -lc "cd '${APP_DIRECTORY}/backend' && npm ci --omit=dev"
+
+# APP_FIX: puppeteer-browser-install
+install -d -o "$APP_USER" -g "$APP_GROUP" "${APP_HOME}/.cache" "${APP_HOME}/.cache/puppeteer"
+HOME="$APP_HOME" PUPPETEER_CACHE_DIR="${APP_HOME}/.cache/puppeteer" bash -lc "cd '${APP_DIRECTORY}/backend' && npx puppeteer browsers install chrome --install-deps"
+chown -R "$APP_USER:$APP_GROUP" "${APP_HOME}/.cache"
 
 # COMPILER_SANDBOX: build-and-service
 docker build --pull --tag socialbird/compiler-sandbox:latest "${APP_DIRECTORY}/deploy/compiler-sandbox"
