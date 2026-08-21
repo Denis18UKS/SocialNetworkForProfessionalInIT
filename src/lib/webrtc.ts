@@ -52,7 +52,6 @@ const buildAudioConstraints = (deviceId?: string): MediaTrackConstraints => {
     echoCancellation: processingEnabled,
     noiseSuppression: processingEnabled,
     autoGainControl: processingEnabled,
-    channelCount: 1,
   };
 };
 
