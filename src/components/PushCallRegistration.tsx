@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { BellRing, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { apiUrl } from "@/lib/settings";
+import { useI18n } from "@/lib/i18n";
 import { useAuth } from "@/pages/AuthContext";
 
 const fromBase64Url = (value: string) => {
@@ -42,6 +43,8 @@ const subscribeForPush = async (token: string) => {
 
 const PushCallRegistration = () => {
   const { isAuthenticated } = useAuth();
+  const { language } = useI18n();
+  const isEnglish = language === "en";
   const [showPrompt, setShowPrompt] = useState(false);
   const [loading, setLoading] = useState(false);
   const [unsupportedIos, setUnsupportedIos] = useState(false);
@@ -90,13 +93,23 @@ const PushCallRegistration = () => {
       <div className="flex items-start gap-3">
         <BellRing className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold">Не пропускать входящие звонки</div>
+          <div className="text-sm font-semibold">
+            {isEnglish ? "Don't miss incoming calls" : "Не пропускать входящие звонки"}
+          </div>
           <p className="mt-1 text-xs text-muted-foreground">
-            Разрешите push-уведомления, чтобы получать входящий звонок, когда SocialBIRD находится в фоне.
-            {unsupportedIos ? " На iPhone сначала добавьте SocialBIRD на экран «Домой», затем откройте установленное приложение." : ""}
+            {isEnglish
+              ? "Allow push notifications to receive incoming calls while SocialBIRD is in the background."
+              : "Разрешите push-уведомления, чтобы получать входящий звонок, когда SocialBIRD находится в фоне."}
+            {unsupportedIos
+              ? (isEnglish
+                ? " On iPhone, first add SocialBIRD to the Home Screen, then open the installed web app."
+                : " На iPhone сначала добавьте SocialBIRD на экран «Домой», затем откройте установленное приложение.")
+              : ""}
           </p>
           <Button type="button" size="sm" className="mt-3" disabled={loading || unsupportedIos} onClick={enable}>
-            {loading ? "Подключаем..." : "Включить звонки в фоне"}
+            {loading
+              ? (isEnglish ? "Enabling..." : "Подключаем...")
+              : (isEnglish ? "Enable background calls" : "Включить звонки в фоне")}
           </Button>
         </div>
         <Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => setShowPrompt(false)}>
