@@ -1,11 +1,13 @@
 export type ThemeMode = "light" | "dark" | "system";
-export type AppLanguage = "ru" | "en";
+export type AppLanguage = "auto" | "ru" | "en";
+export type ResolvedAppLanguage = Exclude<AppLanguage, "auto">;
 export type TranslateLanguage = "ru" | "en" | "de" | "fr" | "es" | "zh";
 export type NoiseSuppressionMode = "off" | "krisp";
 
 export interface AppSettings {
   theme: ThemeMode;
   appLanguage: AppLanguage;
+  languagePreferenceExplicit?: boolean;
   autoTranslate: boolean;
   translateLanguage: TranslateLanguage;
   transcriptionEnabled: boolean;
@@ -15,9 +17,24 @@ export interface AppSettings {
   noiseSuppressionMode?: NoiseSuppressionMode;
 }
 
+export const detectBrowserLanguage = (): ResolvedAppLanguage => {
+  if (typeof navigator === "undefined") return "en";
+  const languages = [
+    ...(Array.isArray(navigator.languages) ? navigator.languages : []),
+    navigator.language,
+  ]
+    .map((language) => String(language || "").toLowerCase())
+    .filter(Boolean);
+  return languages.some((language) => language === "ru" || language.startsWith("ru-")) ? "ru" : "en";
+};
+
+export const resolveAppLanguage = (language: AppLanguage): ResolvedAppLanguage =>
+  language === "auto" ? detectBrowserLanguage() : language;
+
 export const defaultSettings: AppSettings = {
   theme: "system",
-  appLanguage: "ru",
+  appLanguage: "auto",
+  languagePreferenceExplicit: false,
   autoTranslate: false,
   translateLanguage: "ru",
   transcriptionEnabled: false,
@@ -29,7 +46,16 @@ export const settingsStorageKey = "itbird-settings";
 export const readSettings = (): AppSettings => {
   try {
     const raw = localStorage.getItem(settingsStorageKey);
-    return raw ? { ...defaultSettings, ...JSON.parse(raw) } : defaultSettings;
+    if (!raw) return defaultSettings;
+    const parsed = JSON.parse(raw) as Partial<AppSettings>;
+    const migrated = { ...defaultSettings, ...parsed } as AppSettings;
+    // Old builds silently defaulted everyone to Russian. Migrate once to browser language
+    // unless the user explicitly chooses a language in the new selector.
+    if (parsed.languagePreferenceExplicit !== true) {
+      migrated.appLanguage = "auto";
+      migrated.languagePreferenceExplicit = false;
+    }
+    return migrated;
   } catch {
     return defaultSettings;
   }
@@ -37,6 +63,7 @@ export const readSettings = (): AppSettings => {
 
 export const writeSettings = (settings: AppSettings) => {
   localStorage.setItem(settingsStorageKey, JSON.stringify(settings));
+  document.documentElement.lang = resolveAppLanguage(settings.appLanguage);
   window.dispatchEvent(new CustomEvent("itbird-settings-change", { detail: settings }));
 };
 
