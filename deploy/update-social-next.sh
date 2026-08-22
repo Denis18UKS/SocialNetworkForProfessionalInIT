@@ -67,6 +67,7 @@ sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   src/lib/i18n.ts \
   src/lib/webrtc.ts \
   src/lib/call-media-bus.ts \
+  src/lib/screen-share.ts \
   src/components/CallTrackVideo.tsx \
   src/components/PushCallRegistration.tsx \
   src/components/FriendQrTools.tsx \
@@ -82,6 +83,7 @@ sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   backend/compiler-client.js \
   deploy/apply-social-next-fixes.mjs \
   deploy/apply-social-next-v2.mjs \
+  deploy/apply-screen-share-audio-fixes.mjs \
   deploy/ensure-vapid.mjs \
   deploy/harden-source.mjs \
   deploy/enable-sandbox-compiler.mjs \
@@ -98,16 +100,20 @@ node deploy/ensure-vapid.mjs
 chown root:socialbird "$BACKEND_ENV"
 chmod 0640 "$BACKEND_ENV"
 
-echo "[5/10] Applying call, language, mobile and QR fixes"
+echo "[5/10] Applying call, language, mobile, QR and screen-share fixes"
 node --check deploy/apply-social-next-fixes.mjs
 node --check deploy/apply-social-next-v2.mjs
+node --check deploy/apply-screen-share-audio-fixes.mjs
 node --check backend/social-next-features.js
 node --check backend/offline-call-queue.js
 node --check backend/web-push-native.js
 sudo -u "$APP_USER" node deploy/apply-social-next-v2.mjs
+sudo -u "$APP_USER" node deploy/apply-screen-share-audio-fixes.mjs
 
 grep -q 'SOCIAL_NEXT: register-features' backend/server.js
 grep -q 'relayGroupVideoTrack' src/components/VoiceCallControls.tsx
+grep -q 'SCREEN_SHARE_AUDIO_FIX: outgoing' src/components/VoiceCallControls.tsx
+grep -q 'SCREEN_SHARE_AUDIO_FIX: incoming' src/components/RealtimeNotifications.tsx
 grep -q 'requestNextCameraTrack' src/lib/webrtc.ts
 grep -q 'FriendQrTools' src/pages/MyProfile.tsx
 grep -q 'value="auto"' src/pages/Settings.tsx
@@ -161,4 +167,4 @@ trap - ERR
 echo
 echo "SocialBIRD social-next update completed."
 echo "Backup: $BACKUP_DIR"
-echo "Added: mobile friend requests, persistent/fullscreen/PiP calls, group video relay, camera switch, Web Push incoming calls, browser-language auto mode and friend QR."
+echo "Added: mobile friend requests, persistent/fullscreen/PiP calls, group video relay, camera switch, Web Push incoming calls, browser-language auto mode, friend QR and desktop screen-share audio."
