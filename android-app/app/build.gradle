@@ -29,3 +29,9 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
 }
+
+dependencies {
+    // Native background signalling/notifications. The website remains the single UI
+    // codebase; Android only owns OS-level capabilities that a WebView cannot provide.
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+}
