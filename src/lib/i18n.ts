@@ -8,6 +8,7 @@ const dictionary = {
   home: { ru: "Главная", en: "Home" },
   hackathons: { ru: "IT-Хакатоны", en: "IT Hackathons" },
   onlineCompiler: { ru: "Онлайн компилятор", en: "Online compiler" },
+  androidApp: { ru: "Приложение Android", en: "Android app" },
   myProfile: { ru: "Мой профиль", en: "My profile" },
   chats: { ru: "Чаты", en: "Chats" },
   groupChats: { ru: "Групповые чаты", en: "Group chats" },
