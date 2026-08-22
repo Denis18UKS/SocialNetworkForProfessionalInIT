@@ -82,10 +82,16 @@ class ReconnectingWebSocketClient {
 
     socket.onopen = (event) => {
       this.reconnectAttempt = 0;
+
+      // MOBILE_CALL_DELIVERY_FIX: authenticate first.
+      // SocialBIRD's onopen handler sends AUTH. Queued CALL_ACCEPT/CALL_ANSWER/ICE
+      // must never be flushed before that AUTH frame, otherwise the server ignores
+      // them because ws.userId has not been established yet.
+      this.onopen?.(event);
+
       while (this.pendingMessages.length > 0 && socket.readyState === WebSocket.OPEN) {
         socket.send(this.pendingMessages.shift() as WebSocketPayload);
       }
-      this.onopen?.(event);
     };
 
     socket.onmessage = (event) => this.onmessage?.(event);
@@ -100,9 +106,9 @@ class ReconnectingWebSocketClient {
     if (this.reconnectTimer !== null || this.manuallyClosed) return;
 
     const initialDelay = this.options.initialDelayMs ?? 1000;
-    const maxDelay = this.options.maxDelayMs ?? 30000;
+    const maxDelayMs = this.options.maxDelayMs ?? 30000;
     const exponentialDelay = Math.min(
-      maxDelay,
+      maxDelayMs,
       initialDelay * 2 ** Math.min(this.reconnectAttempt, 6),
     );
     const jitter = Math.floor(Math.random() * Math.min(1000, exponentialDelay / 4));
