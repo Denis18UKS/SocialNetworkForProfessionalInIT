@@ -8,6 +8,7 @@ import {
   MessageSquare,
   MessagesSquare,
   Settings,
+  Smartphone,
   User,
   UserPlus,
   Users,
@@ -48,6 +49,7 @@ export function AppSidebar() {
     { title: t("home"), url: "/", icon: Home },
     { title: t("hackathons"), url: "/xakatons", icon: Award },
     { title: t("onlineCompiler"), url: "/compiler", icon: Code2 },
+    { title: t("androidApp"), url: "/android-app", icon: Smartphone },
   ];
 
   const authItems: NavItem[] = [
