@@ -241,6 +241,11 @@ public class MainActivity extends Activity {
                 callJs("window.__itbirdNativeScreenStopped && window.__itbirdNativeScreenStopped();");
                 return;
             }
+
+            // Release an earlier projection before starting the newly approved one.
+            // The foreground service is started only after Android has granted the
+            // MediaProjection consent, which is required on modern Android versions.
+            stopScreenCapture(false);
             startProjectionForegroundService();
             final Intent projectionData = data;
             webView.postDelayed(() -> beginMediaProjection(resultCode, projectionData), 180L);
@@ -254,7 +259,6 @@ public class MainActivity extends Activity {
     }
 
     private void beginMediaProjection(int resultCode, Intent data) {
-        stopScreenCapture(false);
         try {
             mediaProjection = projectionManager.getMediaProjection(resultCode, data);
             if (mediaProjection == null) throw new IllegalStateException("MediaProjection unavailable");
