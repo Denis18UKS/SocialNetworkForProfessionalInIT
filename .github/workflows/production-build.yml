@@ -73,6 +73,7 @@ jobs:
           node --check deploy/apply-mobile-ui-media-fixes.mjs
           node --check deploy/apply-single-camera-tile-fix.mjs
           node --check deploy/apply-native-android-integration.mjs
+          node --check deploy/apply-android-runtime-fixes.mjs
           node --check deploy/ensure-vapid.mjs
           node --check deploy/generate-owner-recovery-codes.mjs
           node --check backend/server.js
@@ -96,6 +97,7 @@ jobs:
           bash -n deploy/update-mobile-ui-media.sh
           bash -n deploy/update-single-camera-tile.sh
           bash -n deploy/update-android-app.sh
+          bash -n deploy/update-native-android-complete.sh
           bash -n deploy/configure-mail.sh
           node deploy/apply-call-mobile-upload-fixes.mjs
           node deploy/apply-call-video-mount-fix.mjs
