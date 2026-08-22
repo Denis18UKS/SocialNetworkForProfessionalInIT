@@ -12,9 +12,18 @@ type NativeBridge = {
 const getBridge = (): NativeBridge | undefined =>
   (window as typeof window & { ITBirdAndroid?: NativeBridge }).ITBirdAndroid;
 
+const consumeNativeAnswerAction = () => {
+  if (!document.cookie.split(";").some((item) => item.trim() === "itbird_native_answer=1")) return false;
+  document.cookie = "itbird_native_answer=; Max-Age=0; Path=/; Secure; SameSite=Strict";
+  try { sessionStorage.setItem("itbird-native-answer-call", "1"); } catch {}
+  window.dispatchEvent(new Event("itbird-native-answer-call"));
+  return true;
+};
+
 /**
- * Keeps the Android OS integration synchronized with the same session used by
- * the React app. No second login/session exists in native code.
+ * Keeps Android OS integrations synchronized with the exact same authenticated
+ * React session used by the website. The native layer owns only OS-only features
+ * such as background notifications, system call UI, PiP and MediaProjection.
  */
 const NativeAppBridge = () => {
   const { isAuthenticated } = useAuth();
@@ -59,6 +68,40 @@ const NativeAppBridge = () => {
       window.removeEventListener("itbird-call-active", markActive);
       window.removeEventListener("itbird-call-ended", markEnded);
       window.removeEventListener("itbird-native-call-state", handleNativeState);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isNativeAndroidApp()) return;
+
+    let timer: number | null = null;
+    const consume = () => {
+      if (consumeNativeAnswerAction() && timer !== null) {
+        window.clearInterval(timer);
+        timer = null;
+      }
+    };
+
+    consume();
+    // Covers cold starts where Android writes the one-shot cookie while WebView is
+    // still loading, plus returning from a full-screen incoming-call notification.
+    timer = window.setInterval(consume, 250);
+    window.setTimeout(() => {
+      if (timer !== null) {
+        window.clearInterval(timer);
+        timer = null;
+      }
+    }, 8000);
+
+    window.addEventListener("focus", consume);
+    document.addEventListener("visibilitychange", consume);
+    window.addEventListener("itbird-native-ready", consume);
+
+    return () => {
+      if (timer !== null) window.clearInterval(timer);
+      window.removeEventListener("focus", consume);
+      document.removeEventListener("visibilitychange", consume);
+      window.removeEventListener("itbird-native-ready", consume);
     };
   }, []);
 
