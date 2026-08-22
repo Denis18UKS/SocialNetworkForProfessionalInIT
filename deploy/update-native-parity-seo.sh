@@ -22,6 +22,7 @@ backup_file() {
     mkdir -p "$(dirname "$target")"
     cp -a "$source" "$target"
   fi
+  return 0
 }
 
 for file in \
@@ -31,11 +32,15 @@ for file in \
   public/sitemap.xml \
   src/App.tsx \
   src/pages/Index.tsx \
+  src/pages/AndroidApp.tsx \
+  src/components/AppSidebar.tsx \
   src/components/SeoManager.tsx \
   src/components/NativeAppBridge.tsx \
   src/components/PushCallRegistration.tsx \
   src/components/RealtimeNotifications.tsx \
   src/components/VoiceCallControls.tsx \
+  src/lib/i18n.ts \
+  src/lib/screen-share.ts \
   backend/server.js \
   backend/server.production.js \
   deploy/install.sh; do
@@ -52,11 +57,15 @@ rollback() {
     public/sitemap.xml \
     src/App.tsx \
     src/pages/Index.tsx \
+    src/pages/AndroidApp.tsx \
+    src/components/AppSidebar.tsx \
     src/components/SeoManager.tsx \
     src/components/NativeAppBridge.tsx \
     src/components/PushCallRegistration.tsx \
     src/components/RealtimeNotifications.tsx \
     src/components/VoiceCallControls.tsx \
+    src/lib/i18n.ts \
+    src/lib/screen-share.ts \
     backend/server.js \
     backend/server.production.js \
     deploy/install.sh; do
@@ -80,7 +89,7 @@ rollback() {
 }
 trap rollback ERR
 
-echo "[1/8] Fetching native parity and SEO files"
+echo "[1/8] Fetching Android parity and SEO files"
 sudo -u "$APP_USER" git fetch origin "$BRANCH:refs/remotes/origin/$BRANCH"
 sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   package.json \
@@ -89,18 +98,29 @@ sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   public/sitemap.xml \
   scripts/generate-seo.mjs \
   src/App.tsx \
+  src/pages/AndroidApp.tsx \
+  src/components/AppSidebar.tsx \
   src/components/SeoManager.tsx \
   src/components/NativeAppBridge.tsx \
+  src/lib/i18n.ts \
+  src/lib/screen-share.ts \
   deploy/apply-seo-fixes.mjs \
-  deploy/apply-native-android-integration.mjs
+  deploy/apply-native-android-integration.mjs \
+  deploy/harden-source.mjs \
+  deploy/enable-sandbox-compiler.mjs
 
-echo "[2/8] Applying shared Android/web integration"
+echo "[2/8] Applying one shared website/Android architecture"
 node --check deploy/apply-native-android-integration.mjs
 sudo -u "$APP_USER" node deploy/apply-native-android-integration.mjs
 grep -q 'clientRole: "call-host"' src/components/RealtimeNotifications.tsx
 grep -q 'clientRole: "call-control"' src/components/VoiceCallControls.tsx
 grep -q 'AUTH_NATIVE' backend/server.js
 grep -q 'durable-call-replay-owner' backend/server.js
+grep -q 'native-notifications-own-background' src/components/PushCallRegistration.tsx
+grep -q 'url: "/android-app"' src/components/AppSidebar.tsx
+grep -q 'path="/android-app"' src/App.tsx
+grep -q 'ITBirdAndroid' src/lib/screen-share.ts
+grep -q 'SocialBIRD-Android.apk' src/pages/AndroidApp.tsx
 
 echo "[3/8] Applying SEO content and metadata"
 node --check deploy/apply-seo-fixes.mjs
@@ -108,6 +128,7 @@ node --check scripts/generate-seo.mjs
 sudo -u "$APP_USER" node deploy/apply-seo-fixes.mjs
 grep -q 'SEO_HOME_INTRO' src/pages/Index.tsx
 grep -q 'SeoManager' src/App.tsx
+grep -q 'socialbird.31.207.74.138.nip.io' public/sitemap.xml
 
 echo "[4/8] Rebuilding hardened API"
 sudo -u "$APP_USER" node deploy/harden-source.mjs
@@ -124,6 +145,7 @@ test -s dist/sitemap.xml
 test -s dist/android-app/index.html
 test -s dist/compiler/index.html
 test -s dist/xakatons/index.html
+test -s dist/forum/index.html
 grep -q 'SocialBIRD — социальная сеть для IT-специалистов' dist/index.html
 grep -q 'rel="canonical"' dist/index.html
 
@@ -147,13 +169,15 @@ for attempt in {1..25}; do
   sleep 1
 done
 
-echo "[7/8] Verifying API and SEO artifacts"
+echo "[7/8] Verifying API, Android route and SEO artifacts"
 curl -fsS http://127.0.0.1:5000/push/public-key | grep -q 'publicKey'
 grep -q 'Sitemap: https://socialbird.31.207.74.138.nip.io/sitemap.xml' dist/robots.txt
 grep -q '<loc>https://socialbird.31.207.74.138.nip.io/' dist/sitemap.xml
+grep -q 'SocialBIRD-Android.apk' src/pages/AndroidApp.tsx
 
 echo "[8/8] Final status"
 sudo -u "$APP_USER" env PM2_HOME="$PM2_HOME_DIR" pm2 status
+ss -lntp | grep ':5000'
 
 trap - ERR
 chown -R "$APP_USER:$APP_USER" src public dist backend 2>/dev/null || true
@@ -163,3 +187,4 @@ echo "Native Android parity + SEO update completed."
 echo "Backup: $BACKUP_DIR"
 echo "Website and APK use the same React/auth/WebRTC core; Android owns only OS-level integrations."
 echo "SEO: canonical/meta/schema, robots.txt, sitemap.xml, public route HTML and visible landing copy are enabled."
+echo "Android download page: /android-app"
