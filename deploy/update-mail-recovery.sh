@@ -74,8 +74,7 @@ sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   deploy/configure-mail.sh \
   deploy/generate-owner-recovery-codes.mjs \
   deploy/harden-source.mjs \
-  deploy/enable-sandbox-compiler.mjs \
-  deploy/update-mail-recovery.sh
+  deploy/enable-sandbox-compiler.mjs
 
 echo "[3/8] Applying source fixes"
 node --check deploy/apply-mail-recovery-fixes.mjs
