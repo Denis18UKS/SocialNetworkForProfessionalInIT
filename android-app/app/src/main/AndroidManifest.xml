@@ -19,6 +19,7 @@
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
     <application
+        android:name=".SocialBirdApplication"
         android:allowBackup="false"
         android:icon="@drawable/ic_launcher"
         android:roundIcon="@drawable/ic_launcher"
