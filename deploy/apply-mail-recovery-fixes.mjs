@@ -102,12 +102,17 @@ patchFile('deploy/install.sh', (input) => {
   }
 
   if (!source.includes('apply-mail-recovery-fixes.mjs')) {
-    const callMarker = 'sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/apply-call-video-mount-fix.mjs"';
-    if (!source.includes(callMarker)) throw new Error('Mail recovery fix failed: installer call marker not found');
-    source = source.replace(
-      callMarker,
-      `${callMarker}\nsudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/apply-mail-recovery-fixes.mjs"`,
-    );
+    const preferredMarker = 'sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/apply-call-video-mount-fix.mjs"';
+    const fallbackMarker = 'sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/harden-source.mjs"';
+    const mailCall = 'sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/apply-mail-recovery-fixes.mjs"';
+
+    if (source.includes(preferredMarker)) {
+      source = source.replace(preferredMarker, `${preferredMarker}\n${mailCall}`);
+    } else if (source.includes(fallbackMarker)) {
+      source = source.replace(fallbackMarker, `${mailCall}\n${fallbackMarker}`);
+    } else {
+      console.warn('Mail recovery installer hook skipped: no known source-patch marker found');
+    }
   }
   return source;
 });
