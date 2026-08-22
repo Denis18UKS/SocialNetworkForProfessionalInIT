@@ -145,11 +145,12 @@ const transporter = nodemailer.createTransport({
 })().catch((error) => {
   const message = String(error?.message || error);
   if (/application password|parol prilozheniya|535 5\.7\.0/i.test(message)) {
-    console.error('SMTP authentication failed at Mail.ru AUTH stage. Connection/TLS are OK, but Mail.ru rejected the credential.');
-    console.error('Check Mail.ru -> Settings -> All settings -> Security:');
-    console.error('  1) External services: IMAP/POP/SMTP access must be enabled.');
-    console.error('  2) Create a NEW password in "Passwords for external applications" for mail access.');
-    console.error('  3) Paste that generated app password here, not the normal mailbox password or a 2FA/backup code.');
+    console.error('SMTP authentication failed at Mail.ru AUTH stage. Connection/TLS are OK, but Mail.ru rejected this credential.');
+    console.error('For a NEW Mail.ru external-app password, choose one of these access types:');
+    console.error('  - "Только отправка писем в Почте" (recommended for IT-BIRD), or');
+    console.error('  - "Полный доступ к Почте".');
+    console.error('A password scoped only to Calendar, Cloud or Contacts will not authorize SMTP sending.');
+    console.error('Also make sure the mailbox has a phone attached, as Mail.ru requires it for external-app passwords.');
   } else if (/wrong version number/i.test(message)) {
     console.error('SMTP TLS mode/port mismatch. Mail.ru should use smtp.mail.ru:465 with secure=true.');
   } else if (/ENOTFOUND|getaddrinfo/i.test(message)) {
