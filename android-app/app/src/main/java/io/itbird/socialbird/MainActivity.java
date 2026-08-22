@@ -10,6 +10,10 @@ import android.graphics.Bitmap;
 import android.graphics.PixelFormat;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
+import android.media.AudioAttributes;
+import android.media.AudioFormat;
+import android.media.AudioPlaybackCaptureConfiguration;
+import android.media.AudioRecord;
 import android.media.Image;
 import android.media.ImageReader;
 import android.media.projection.MediaProjection;
@@ -20,6 +24,7 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.Process;
 import android.util.Base64;
 import android.util.DisplayMetrics;
 import android.view.ViewGroup;
@@ -51,6 +56,8 @@ public class MainActivity extends Activity {
     private static final int REQUEST_SCREEN_CAPTURE = 3003;
     private static final long FRAME_INTERVAL_MS = 100L;
     private static final int MAX_CAPTURE_WIDTH = 720;
+    private static final int PLAYBACK_SAMPLE_RATE = 48000;
+    private static final int PLAYBACK_CHANNELS = 2;
 
     private WebView webView;
     private PermissionRequest pendingWebPermissionRequest;
@@ -61,6 +68,9 @@ public class MainActivity extends Activity {
     private ImageReader imageReader;
     private HandlerThread captureThread;
     private Handler captureHandler;
+    private AudioRecord playbackAudioRecord;
+    private HandlerThread playbackAudioThread;
+    private volatile boolean playbackAudioActive = false;
     private long lastFrameAt = 0L;
     private boolean screenCaptureActive = false;
 
@@ -242,9 +252,6 @@ public class MainActivity extends Activity {
                 return;
             }
 
-            // Release an earlier projection before starting the newly approved one.
-            // The foreground service is started only after Android has granted the
-            // MediaProjection consent, which is required on modern Android versions.
             stopScreenCapture(false);
             startProjectionForegroundService();
             final Intent projectionData = data;
@@ -297,12 +304,96 @@ public class MainActivity extends Activity {
 
             screenCaptureActive = true;
             lastFrameAt = 0L;
+            boolean playbackAudioSupported = startPlaybackAudioCapture();
             callJs("window.__itbirdNativeScreenStarted && window.__itbirdNativeScreenStarted("
-                + captureWidth + "," + captureHeight + ",10);");
+                + captureWidth + "," + captureHeight + ",10," + (playbackAudioSupported ? "true" : "false") + ");");
         } catch (Exception error) {
             stopScreenCapture(false);
             callJs("window.__itbirdNativeScreenError && window.__itbirdNativeScreenError("
                 + JSONObject.quote("Не удалось запустить MediaProjection: " + error.getMessage()) + ");");
+        }
+    }
+
+    private boolean startPlaybackAudioCapture() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || mediaProjection == null) return false;
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return false;
+
+        try {
+            AudioPlaybackCaptureConfiguration configuration =
+                new AudioPlaybackCaptureConfiguration.Builder(mediaProjection)
+                    .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
+                    .addMatchingUsage(AudioAttributes.USAGE_GAME)
+                    .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
+                    .excludeUid(Process.myUid())
+                    .build();
+
+            AudioFormat format = new AudioFormat.Builder()
+                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                .setSampleRate(PLAYBACK_SAMPLE_RATE)
+                .setChannelMask(AudioFormat.CHANNEL_IN_STEREO)
+                .build();
+
+            int minimum = AudioRecord.getMinBufferSize(
+                PLAYBACK_SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_STEREO,
+                AudioFormat.ENCODING_PCM_16BIT
+            );
+            int bufferSize = Math.max(8192, minimum > 0 ? minimum * 2 : 8192);
+
+            playbackAudioRecord = new AudioRecord.Builder()
+                .setAudioFormat(format)
+                .setBufferSizeInBytes(bufferSize)
+                .setAudioPlaybackCaptureConfig(configuration)
+                .build();
+
+            if (playbackAudioRecord.getState() != AudioRecord.STATE_INITIALIZED) {
+                playbackAudioRecord.release();
+                playbackAudioRecord = null;
+                return false;
+            }
+
+            playbackAudioRecord.startRecording();
+            playbackAudioActive = true;
+            playbackAudioThread = new HandlerThread("SocialBIRDPlaybackAudio");
+            playbackAudioThread.start();
+            Handler handler = new Handler(playbackAudioThread.getLooper());
+            AudioRecord activeRecord = playbackAudioRecord;
+            handler.post(() -> pumpPlaybackAudio(activeRecord));
+            return true;
+        } catch (Exception error) {
+            stopPlaybackAudioCapture();
+            return false;
+        }
+    }
+
+    private void pumpPlaybackAudio(AudioRecord record) {
+        byte[] buffer = new byte[4096];
+        while (playbackAudioActive && record == playbackAudioRecord) {
+            int read;
+            try {
+                read = record.read(buffer, 0, buffer.length, AudioRecord.READ_BLOCKING);
+            } catch (Exception error) {
+                break;
+            }
+            if (read <= 0) continue;
+
+            String encoded = Base64.encodeToString(buffer, 0, read, Base64.NO_WRAP);
+            callJs("window.__itbirdNativeScreenAudio && window.__itbirdNativeScreenAudio("
+                + JSONObject.quote(encoded) + "," + PLAYBACK_SAMPLE_RATE + "," + PLAYBACK_CHANNELS + ");");
+        }
+    }
+
+    private void stopPlaybackAudioCapture() {
+        playbackAudioActive = false;
+        if (playbackAudioRecord != null) {
+            AudioRecord record = playbackAudioRecord;
+            playbackAudioRecord = null;
+            try { record.stop(); } catch (Exception ignored) {}
+            try { record.release(); } catch (Exception ignored) {}
+        }
+        if (playbackAudioThread != null) {
+            playbackAudioThread.quitSafely();
+            playbackAudioThread = null;
         }
     }
 
@@ -345,6 +436,7 @@ public class MainActivity extends Activity {
     private void stopScreenCapture(boolean notifyWeb) {
         boolean wasActive = screenCaptureActive || mediaProjection != null || virtualDisplay != null;
         screenCaptureActive = false;
+        stopPlaybackAudioCapture();
 
         if (virtualDisplay != null) {
             virtualDisplay.release();
