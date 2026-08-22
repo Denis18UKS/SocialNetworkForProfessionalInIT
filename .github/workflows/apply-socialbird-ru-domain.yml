@@ -1,0 +1,53 @@
+name: Apply SocialBIRD custom domain
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - deploy/socialbird-vps-production
+    paths:
+      - "deploy/apply-socialbird-ru-domain.mjs"
+      - ".github/workflows/apply-socialbird-ru-domain.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: socialbird-custom-domain-source
+  cancel-in-progress: true
+
+jobs:
+  migrate-source-domain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout production branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Apply custom domain to source/configs
+        run: |
+          node --check deploy/apply-socialbird-ru-domain.mjs
+          node deploy/apply-socialbird-ru-domain.mjs
+          grep -q "socialbird.ru" scripts/generate-seo.mjs
+          grep -q "api.socialbird.ru" android-app/app/src/main/java/io/itbird/socialbird/BackgroundMessagingService.java
+          grep -q "VITE_API_URL: https://api.socialbird.ru" .github/workflows/production-build.yml
+
+      - name: Validate changes
+        run: git diff --check
+
+      - name: Commit migrated source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html public/robots.txt public/sitemap.xml scripts/generate-seo.mjs src/components/SeoManager.tsx android-app/app/src/main/java/io/itbird/socialbird/MainActivity.java android-app/app/src/main/java/io/itbird/socialbird/BackgroundMessagingService.java deploy/install.sh deploy/update-native-parity-seo.sh deploy/update-native-android-complete.sh .github/workflows/production-build.yml .github/workflows/android-apk.yml
+          if ! git diff --cached --quiet; then
+            git commit -m "Migrate SocialBIRD source to socialbird.ru"
+            git push origin HEAD:${GITHUB_REF_NAME}
+          fi
