@@ -27,6 +27,9 @@ type NativeScreenSession = {
   resolved: boolean;
   stopping: boolean;
   frameBusy: boolean;
+  audioContext: AudioContext | null;
+  audioDestination: MediaStreamAudioDestinationNode | null;
+  audioNextTime: number;
   resolve: (capture: ScreenShareCapture) => void;
   reject: (error: Error) => void;
 };
@@ -34,8 +37,9 @@ type NativeScreenSession = {
 declare global {
   interface Window {
     ITBirdAndroid?: AndroidBridge;
-    __itbirdNativeScreenStarted?: (width: number, height: number, fps?: number) => void;
+    __itbirdNativeScreenStarted?: (width: number, height: number, fps?: number, audioSupported?: boolean) => void;
     __itbirdNativeScreenFrame?: (dataUrl: string, width?: number, height?: number) => void;
+    __itbirdNativeScreenAudio?: (base64Pcm: string, sampleRate?: number, channels?: number) => void;
     __itbirdNativeScreenStopped?: () => void;
     __itbirdNativeScreenError?: (message?: string) => void;
   }
@@ -66,6 +70,11 @@ const teardownNativeSession = (stopNative: boolean) => {
   session.stream?.getTracks().forEach((track) => {
     if (track.readyState !== "ended") track.stop();
   });
+  if (session.audioContext) {
+    void session.audioContext.close().catch(() => undefined);
+    session.audioContext = null;
+    session.audioDestination = null;
+  }
   if (stopNative) {
     try { window.ITBirdAndroid?.stopScreenShare?.(); } catch {}
   }
@@ -73,26 +82,37 @@ const teardownNativeSession = (stopNative: boolean) => {
 };
 
 const ensureNativeCallbacks = () => {
-  window.__itbirdNativeScreenStarted = (width, height, fps = 10) => {
+  window.__itbirdNativeScreenStarted = (width, height, fps = 10, audioSupported = false) => {
     const session = nativeSession;
     if (!session || session.resolved) return;
 
     session.canvas.width = Math.max(2, Math.round(Number(width) || 720));
     session.canvas.height = Math.max(2, Math.round(Number(height) || 1280));
-    const captureStream = session.canvas.captureStream(Math.max(4, Math.min(20, Number(fps) || 10)));
-    const videoTrack = captureStream.getVideoTracks()[0];
+    const canvasStream = session.canvas.captureStream(Math.max(4, Math.min(20, Number(fps) || 10)));
+    const videoTrack = canvasStream.getVideoTracks()[0];
     if (!videoTrack) {
       session.reject(new ScreenShareUnavailableError("Android не смог создать видеотрек демонстрации экрана."));
       teardownNativeSession(true);
       return;
     }
 
-    session.stream = captureStream;
+    let audioTracks: MediaStreamTrack[] = [];
+    if (audioSupported && session.audioDestination && session.audioContext) {
+      audioTracks = session.audioDestination.stream.getAudioTracks();
+      void session.audioContext.resume().catch(() => undefined);
+    } else if (session.audioContext) {
+      void session.audioContext.close().catch(() => undefined);
+      session.audioContext = null;
+      session.audioDestination = null;
+    }
+
+    const combined = new MediaStream([videoTrack, ...audioTracks]);
+    session.stream = combined;
     session.resolved = true;
     videoTrack.addEventListener("ended", () => {
       if (!session.stopping) teardownNativeSession(true);
     }, { once: true });
-    session.resolve({ stream: captureStream, videoTrack, audioTracks: [] });
+    session.resolve({ stream: combined, videoTrack, audioTracks });
   };
 
   window.__itbirdNativeScreenFrame = (dataUrl, width, height) => {
@@ -114,6 +134,47 @@ const ensureNativeCallbacks = () => {
     };
     image.onerror = () => { session.frameBusy = false; };
     image.src = dataUrl;
+  };
+
+  window.__itbirdNativeScreenAudio = (base64Pcm, sampleRate = 48000, channels = 2) => {
+    const session = nativeSession;
+    const context = session?.audioContext;
+    const destination = session?.audioDestination;
+    if (!session || !context || !destination || !base64Pcm) return;
+
+    try {
+      if (context.state === "suspended") void context.resume().catch(() => undefined);
+      const binary = atob(base64Pcm);
+      const channelCount = Math.max(1, Math.min(2, Math.round(Number(channels) || 2)));
+      const rate = Math.max(8000, Math.min(96000, Math.round(Number(sampleRate) || 48000)));
+      const frameCount = Math.floor(binary.length / (2 * channelCount));
+      if (frameCount <= 0) return;
+
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+      const view = new DataView(bytes.buffer);
+      const buffer = context.createBuffer(channelCount, frameCount, rate);
+
+      for (let channel = 0; channel < channelCount; channel += 1) {
+        const output = buffer.getChannelData(channel);
+        for (let frame = 0; frame < frameCount; frame += 1) {
+          const sampleIndex = (frame * channelCount + channel) * 2;
+          output[frame] = view.getInt16(sampleIndex, true) / 32768;
+        }
+      }
+
+      const source = context.createBufferSource();
+      source.buffer = buffer;
+      source.connect(destination);
+      const now = context.currentTime;
+      if (!Number.isFinite(session.audioNextTime) || session.audioNextTime < now || session.audioNextTime > now + 0.45) {
+        session.audioNextTime = now + 0.04;
+      }
+      source.start(session.audioNextTime);
+      session.audioNextTime += frameCount / rate;
+    } catch {
+      // A later PCM chunk can recover; video sharing continues independently.
+    }
   };
 
   window.__itbirdNativeScreenStopped = () => {
@@ -155,6 +216,21 @@ const requestNativeAndroidScreenShare = async (): Promise<ScreenShareCapture> =>
     context.fillStyle = "#000";
     context.fillRect(0, 0, canvas.width, canvas.height);
 
+    const AudioContextClass = window.AudioContext
+      || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    let audioContext: AudioContext | null = null;
+    let audioDestination: MediaStreamAudioDestinationNode | null = null;
+    if (AudioContextClass) {
+      try {
+        audioContext = new AudioContextClass();
+        audioDestination = audioContext.createMediaStreamDestination();
+        void audioContext.resume().catch(() => undefined);
+      } catch {
+        audioContext = null;
+        audioDestination = null;
+      }
+    }
+
     nativeSession = {
       canvas,
       context,
@@ -162,6 +238,9 @@ const requestNativeAndroidScreenShare = async (): Promise<ScreenShareCapture> =>
       resolved: false,
       stopping: false,
       frameBusy: false,
+      audioContext,
+      audioDestination,
+      audioNextTime: 0,
       resolve,
       reject,
     };
@@ -169,6 +248,7 @@ const requestNativeAndroidScreenShare = async (): Promise<ScreenShareCapture> =>
     try {
       bridge.requestScreenShare?.();
     } catch (error) {
+      if (audioContext) void audioContext.close().catch(() => undefined);
       nativeSession = null;
       reject(error instanceof Error ? error : new Error("Android screen-share bridge failed"));
     }
@@ -259,5 +339,5 @@ export const getScreenShareErrorMessage = (error: unknown) => {
 
 export const getMissingScreenAudioMessage = () =>
   isNativeAndroidApp()
-    ? "Экран Android транслируется. В первой версии нативного MediaProjection-моста системный звук Android в звонок не захватывается; микрофон звонка продолжает работать отдельно."
+    ? "Экран Android транслируется, но это устройство/приложение не разрешило захват системного аудио. На Android 10+ SocialBIRD пытается захватывать разрешённый медиазвук через AudioPlaybackCapture; микрофон звонка при этом работает отдельно."
     : "Экран транслируется, но браузер не передал системный звук. В Chrome/Edge выберите вкладку/экран с доступным звуком и включите «Поделиться аудио» / «Share audio». В браузерах без захвата системного аудио демонстрация продолжит работать без звука.";
