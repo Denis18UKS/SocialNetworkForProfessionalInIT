@@ -31,6 +31,7 @@ import AndroidApp from './pages/AndroidApp';
 import RealtimeNotifications from './components/RealtimeNotifications';
 import PushCallRegistration from './components/PushCallRegistration';
 import NativeAppBridge from './components/NativeAppBridge';
+import SeoManager from './components/SeoManager';
 import { AuthProvider } from "@/pages/AuthContext";
 
 const queryClient = new QueryClient();
@@ -76,6 +77,7 @@ const AppLayout = () => {
 
   return (
     <>
+      <SeoManager />
       <NativeAppBridge />
       <RealtimeNotifications />
       <PushCallRegistration />
