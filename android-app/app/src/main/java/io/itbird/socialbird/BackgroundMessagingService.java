@@ -32,17 +32,17 @@ import okhttp3.WebSocket;
 import okhttp3.WebSocketListener;
 
 /**
- * Native notification/signalling companion for the SocialBIRD WebView.
+ * Native OS companion for the shared SocialBIRD web application.
  *
- * The React application remains the single UI and WebRTC implementation. This
- * service owns only capabilities that Android browsers/WebView cannot reliably
- * provide while the activity is backgrounded: a persistent authenticated
- * signalling listener, native incoming-call notifications, message notifications,
- * and keeping the process/CPU alive during an active call.
+ * React/WebRTC remains the only interactive implementation. This service owns only
+ * Android responsibilities that a background WebView cannot reliably provide:
+ * persistent signalling awareness, system call/message notifications, ringing and
+ * a wake lock while an accepted call is active.
  *
- * It authenticates with AUTH_NATIVE, so the server does not count this socket as
- * an interactive "online" browser and does not consume the durable WebRTC signal
- * queue that must later be replayed into the WebView.
+ * AUTH_NATIVE is deliberately notification-only. The service never consumes the
+ * durable WebRTC offer/ICE queue; when the user opens/answers a call the global
+ * React call host receives that queue and creates the same peer connection code used
+ * on the website.
  */
 public class BackgroundMessagingService extends Service {
     public static final String PREFS = "socialbird_native";
@@ -79,6 +79,7 @@ public class BackgroundMessagingService extends Service {
         prefs.edit().putString(PREF_AUTH_TOKEN, normalized).apply();
         if (normalized.isEmpty()) {
             context.stopService(new Intent(context, BackgroundMessagingService.class));
+            dismissIncomingCallNotification(context);
             return;
         }
 
@@ -110,6 +111,11 @@ public class BackgroundMessagingService extends Service {
         syncAuth(context, token);
     }
 
+    public static void dismissIncomingCallNotification(Context context) {
+        NotificationManager manager = context.getSystemService(NotificationManager.class);
+        if (manager != null) manager.cancel(CALL_NOTIFICATION_ID);
+    }
+
     private static void startCompat(Context context, Intent intent) {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -118,8 +124,8 @@ public class BackgroundMessagingService extends Service {
                 context.startService(intent);
             }
         } catch (Exception ignored) {
-            // A foreground/background launch restriction may apply. The next visible
-            // Activity resume re-synchronizes auth and starts the service again.
+            // Honor/other OEM power managers can block a background launch after the
+            // process has been force-stopped. The next Activity resume re-syncs auth.
         }
     }
 
@@ -147,6 +153,7 @@ public class BackgroundMessagingService extends Service {
                     sendPendingDecline();
                 } catch (Exception ignored) {}
             }
+            currentCall = null;
             cancelCallNotification();
         } else if (ACTION_CALL_STATE.equals(action)) {
             setCallWakeLock(intent.getBooleanExtra(EXTRA_CALL_ACTIVE, false));
@@ -195,6 +202,7 @@ public class BackgroundMessagingService extends Service {
                     auth.put("type", "AUTH_NATIVE");
                     auth.put("token", authToken);
                     auth.put("platform", "android");
+                    auth.put("appVersion", BuildConfig.VERSION_NAME);
                     webSocket.send(auth.toString());
                     sendPendingDecline();
                 } catch (Exception ignored) {}
@@ -247,8 +255,6 @@ public class BackgroundMessagingService extends Service {
                     setCallWakeLock(false);
                     break;
                 case "NEW_MESSAGE":
-                    if (!MainActivity.isVisible()) showMessageNotification(type, data);
-                    break;
                 case "NEW_GROUP_MESSAGE":
                 case "GROUP_MENTION":
                 case "NEW_FORUM_ANSWER":
@@ -261,8 +267,7 @@ public class BackgroundMessagingService extends Service {
                     break;
             }
         } catch (Exception ignored) {
-            // Ignore malformed/unsupported notifications; the WebView remains the
-            // authoritative handler when the app is foregrounded.
+            // Foreground React remains authoritative for malformed/unknown messages.
         }
     }
 
@@ -374,8 +379,20 @@ public class BackgroundMessagingService extends Service {
         boolean video = "video".equalsIgnoreCase(call.optString("callKind", "voice"));
         String route = callRoute(call);
 
-        Intent answerIntent = buildOpenIntent(route);
-        answerIntent.putExtra("incoming_call", true);
+        // Opening the notification/full-screen ringing UI must NOT accept the call.
+        // Only the explicit Answer action sets answer_call=true.
+        Intent ringIntent = buildOpenIntent(route)
+            .putExtra("incoming_call", true);
+        PendingIntent ringPending = PendingIntent.getActivity(
+            this,
+            4300,
+            ringIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+
+        Intent answerIntent = buildOpenIntent(route)
+            .putExtra("incoming_call", true)
+            .putExtra("answer_call", true);
         PendingIntent answerPending = PendingIntent.getActivity(
             this,
             4301,
@@ -402,8 +419,8 @@ public class BackgroundMessagingService extends Service {
                 ? (ru ? "Входящий видеозвонок" : "Incoming video call")
                 : (ru ? "Входящий голосовой звонок" : "Incoming voice call"))
             .setContentText(callerName)
-            .setContentIntent(answerPending)
-            .setFullScreenIntent(answerPending, true)
+            .setContentIntent(ringPending)
+            .setFullScreenIntent(ringPending, true)
             .setCategory(Notification.CATEGORY_CALL)
             .setVisibility(Notification.VISIBILITY_PUBLIC)
             .setPriority(Notification.PRIORITY_MAX)
@@ -524,8 +541,7 @@ public class BackgroundMessagingService extends Service {
     }
 
     private void cancelCallNotification() {
-        NotificationManager manager = getSystemService(NotificationManager.class);
-        if (manager != null) manager.cancel(CALL_NOTIFICATION_ID);
+        dismissIncomingCallNotification(this);
     }
 
     private void setCallWakeLock(boolean active) {
