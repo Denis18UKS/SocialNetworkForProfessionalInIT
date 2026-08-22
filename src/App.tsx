@@ -27,6 +27,7 @@ import Moderation from './pages/admin/Moderation';
 import GroupChats from './pages/GroupChats';
 import Settings from './pages/Settings';
 import OnlineCompiler from './pages/OnlineCompiler';
+import AndroidApp from './pages/AndroidApp';
 import RealtimeNotifications from './components/RealtimeNotifications';
 import PushCallRegistration from './components/PushCallRegistration';
 import { AuthProvider } from "@/pages/AuthContext";
@@ -106,6 +107,7 @@ const AppLayout = () => {
                 <Route path="/group-chats" element={<GroupChats />} />
                 <Route path="/settings" element={<Settings />} />
                 <Route path="/compiler" element={<OnlineCompiler />} />
+                <Route path="/android-app" element={<AndroidApp />} />
                 <Route path="/admin/users" element={<AdminUsers />} />
                 <Route path="/admin/moderation" element={<Moderation />} />
                 <Route path="*" element={<NotFound />} />
