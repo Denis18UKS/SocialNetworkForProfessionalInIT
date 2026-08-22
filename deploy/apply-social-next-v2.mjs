@@ -26,6 +26,17 @@ try {
   fs.rmSync(tempPath, { force: true });
 }
 
+// Push permission must come from the explicit opt-in banner. Asking automatically on
+// page load makes browsers more likely to block notifications permanently.
+const realtimePath = path.join(root, 'src', 'components', 'RealtimeNotifications.tsx');
+let realtime = fs.readFileSync(realtimePath, 'utf8');
+const autoPermission = `  useEffect(() => {\n    if (!isAuthenticated || !("Notification" in window) || Notification.permission !== "default") return;\n    Notification.requestPermission().catch(() => undefined);\n  }, [isAuthenticated]);\n`;
+if (realtime.includes(autoPermission)) {
+  realtime = realtime.replace(autoPermission, '  // SOCIAL_NEXT: notification permission is requested only from PushCallRegistration.\n');
+  fs.writeFileSync(realtimePath, realtime, 'utf8');
+  console.log('Removed automatic notification permission prompt.');
+}
+
 const installerPath = path.join(root, 'deploy', 'install.sh');
 let installer = fs.readFileSync(installerPath, 'utf8');
 const before = installer;
