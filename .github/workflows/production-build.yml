@@ -48,6 +48,7 @@ jobs:
           node deploy/apply-social-next-v2.mjs
           node deploy/apply-screen-share-audio-fixes.mjs
           node deploy/apply-mobile-call-delivery-fix.mjs
+          node deploy/apply-call-hangup-lifecycle-fix.mjs
           node deploy/harden-source.mjs --in-place
           node deploy/enable-sandbox-compiler.mjs --in-place
           node deploy/patch-installer.mjs
@@ -65,6 +66,7 @@ jobs:
           node --check deploy/apply-social-next-v2.mjs
           node --check deploy/apply-screen-share-audio-fixes.mjs
           node --check deploy/apply-mobile-call-delivery-fix.mjs
+          node --check deploy/apply-call-hangup-lifecycle-fix.mjs
           node --check deploy/ensure-vapid.mjs
           node --check deploy/generate-owner-recovery-codes.mjs
           node --check backend/server.js
@@ -84,6 +86,7 @@ jobs:
           bash -n deploy/update-social-next.sh
           bash -n deploy/update-screen-share.sh
           bash -n deploy/update-mobile-call-delivery.sh
+          bash -n deploy/update-call-hangup-lifecycle.sh
           bash -n deploy/configure-mail.sh
           node deploy/apply-call-mobile-upload-fixes.mjs
           node deploy/apply-call-video-mount-fix.mjs
@@ -91,6 +94,7 @@ jobs:
           node deploy/apply-social-next-v2.mjs
           node deploy/apply-screen-share-audio-fixes.mjs
           node deploy/apply-mobile-call-delivery-fix.mjs
+          node deploy/apply-call-hangup-lifecycle-fix.mjs
           node deploy/harden-source.mjs
           node deploy/enable-sandbox-compiler.mjs
           node --check backend/server.production.js
