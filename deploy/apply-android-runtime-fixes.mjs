@@ -55,7 +55,7 @@ if (!source.includes('NATIVE_ANDROID_RUNTIME: page-ready-answer')) {
 if (!source.includes('NATIVE_ANDROID_RUNTIME: web-fullscreen')) {
   const marker = `            @Override\n            public void onPermissionRequest(PermissionRequest request) {`;
   if (!source.includes(marker)) throw new Error('Android runtime patch failed: WebChromeClient marker');
-  const block = `            // NATIVE_ANDROID_RUNTIME: web-fullscreen\n            @Override\n            public void onShowCustomView(View view, CustomViewCallback callback) {\n                showWebFullscreen(view, callback);\n            }\n\n            @Override\n            public void onHideCustomView() {\n                hideWebFullscreen();\n            }\n\n${marker}`;
+  const block = `            // NATIVE_ANDROID_RUNTIME: web-fullscreen\n            @Override\n            public void onShowCustomView(View view, WebChromeClient.CustomViewCallback callback) {\n                showWebFullscreen(view, callback);\n            }\n\n            @Override\n            public void onHideCustomView() {\n                hideWebFullscreen();\n            }\n\n${marker}`;
   source = source.replace(marker, block);
 }
 
