@@ -255,7 +255,7 @@ public class MainActivity extends Activity {
             stopScreenCapture(false);
             startProjectionForegroundService();
             final Intent projectionData = data;
-            webView.postDelayed(() -> beginMediaProjection(resultCode, projectionData), 180L);
+            waitForProjectionService(resultCode, projectionData, 0);
         }
     }
 
@@ -263,6 +263,19 @@ public class MainActivity extends Activity {
         Intent serviceIntent = new Intent(this, MediaProjectionService.class);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(serviceIntent);
         else startService(serviceIntent);
+    }
+
+    private void waitForProjectionService(int resultCode, Intent data, int attempt) {
+        if (MediaProjectionService.isForegroundReady()) {
+            beginMediaProjection(resultCode, data);
+            return;
+        }
+        if (attempt >= 40) {
+            stopService(new Intent(this, MediaProjectionService.class));
+            callJs("window.__itbirdNativeScreenError && window.__itbirdNativeScreenError('Android не успел запустить службу MediaProjection');");
+            return;
+        }
+        webView.postDelayed(() -> waitForProjectionService(resultCode, data, attempt + 1), 50L);
     }
 
     private void beginMediaProjection(int resultCode, Intent data) {
