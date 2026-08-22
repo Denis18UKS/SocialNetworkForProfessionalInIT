@@ -17,8 +17,11 @@ install -d -o root -g root -m 0750 "$BACKUP_DIR"
 for file in \
   src/App.tsx \
   src/components/AppSidebar.tsx \
+  src/components/VoiceCallControls.tsx \
+  src/components/RealtimeNotifications.tsx \
   src/lib/i18n.ts \
-  src/lib/screen-share.ts; do
+  src/lib/screen-share.ts \
+  src/lib/call-media-bus.ts; do
   mkdir -p "$BACKUP_DIR/$(dirname "$file")"
   cp -a "$file" "$BACKUP_DIR/$file"
 done
@@ -34,8 +37,11 @@ rollback() {
   echo "Android app website update failed; restoring previous frontend..." >&2
   cp -a "$BACKUP_DIR/src/App.tsx" src/App.tsx
   cp -a "$BACKUP_DIR/src/components/AppSidebar.tsx" src/components/AppSidebar.tsx
+  cp -a "$BACKUP_DIR/src/components/VoiceCallControls.tsx" src/components/VoiceCallControls.tsx
+  cp -a "$BACKUP_DIR/src/components/RealtimeNotifications.tsx" src/components/RealtimeNotifications.tsx
   cp -a "$BACKUP_DIR/src/lib/i18n.ts" src/lib/i18n.ts
   cp -a "$BACKUP_DIR/src/lib/screen-share.ts" src/lib/screen-share.ts
+  cp -a "$BACKUP_DIR/src/lib/call-media-bus.ts" src/lib/call-media-bus.ts
   if [[ -f "$BACKUP_DIR/android-page-existed" ]]; then
     cp -a "$BACKUP_DIR/src/pages/AndroidApp.tsx" src/pages/AndroidApp.tsx
   else
@@ -50,29 +56,40 @@ rollback() {
 }
 trap rollback ERR
 
-echo "[1/5] Fetching Android app website files"
+echo "[1/6] Fetching Android app website files"
 sudo -u "$APP_USER" git fetch origin "$BRANCH:refs/remotes/origin/$BRANCH"
 sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   src/App.tsx \
   src/components/AppSidebar.tsx \
   src/lib/i18n.ts \
   src/lib/screen-share.ts \
-  src/pages/AndroidApp.tsx
+  src/pages/AndroidApp.tsx \
+  deploy/apply-screen-share-audio-fixes.mjs \
+  deploy/apply-single-camera-tile-fix.mjs
 
-echo "[2/5] Verifying Android route and native bridge"
+echo "[2/6] Applying native screen-share integration and single-camera guard"
+node --check deploy/apply-screen-share-audio-fixes.mjs
+node --check deploy/apply-single-camera-tile-fix.mjs
+sudo -u "$APP_USER" node deploy/apply-screen-share-audio-fixes.mjs
+sudo -u "$APP_USER" node deploy/apply-single-camera-tile-fix.mjs
+
+echo "[3/6] Verifying Android route and call integration"
 grep -q 'path="/android-app"' src/App.tsx
 grep -q 'url: "/android-app"' src/components/AppSidebar.tsx
 grep -q 'ITBirdAndroid' src/lib/screen-share.ts
+grep -q '@/lib/screen-share' src/components/VoiceCallControls.tsx
+grep -q '@/lib/screen-share' src/components/RealtimeNotifications.tsx
+grep -q 'SINGLE_CAMERA_TILE_FIX' src/components/VoiceCallControls.tsx
 grep -q 'MediaProjection' src/pages/AndroidApp.tsx
 
-echo "[3/5] Building production frontend"
+echo "[4/6] Building production frontend"
 sudo -u "$APP_USER" npm run build
 
-echo "[4/5] Verifying generated frontend"
+echo "[5/6] Verifying generated frontend"
 test -s dist/index.html
 find dist/assets -maxdepth 1 -type f -name '*.js' -size +1k | grep -q .
 
-echo "[5/5] Final status"
+echo "[6/6] Final status"
 trap - ERR
 chown -R "$APP_USER:$APP_USER" src dist 2>/dev/null || true
 
@@ -80,4 +97,5 @@ echo
 echo "Android app website update completed."
 echo "Backup: $BACKUP_DIR"
 echo "Sidebar: /android-app"
+echo "Native Android bridge: enabled through src/lib/screen-share.ts"
 echo "APK: https://github.com/Denis18UKS/SocialNetworkForProfessionalInIT/releases/download/android-latest/SocialBIRD-Android.apk"
