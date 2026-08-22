@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { AppLanguage, AppSettings, readSettings, settingsStorageKey } from "./settings";
+import { AppSettings, ResolvedAppLanguage, readSettings, resolveAppLanguage, settingsStorageKey } from "./settings";
 
-type Dictionary = Record<string, Record<AppLanguage, string>>;
+type Dictionary = Record<string, Record<ResolvedAppLanguage, string>>;
 
 const dictionary = {
   navigation: { ru: "Навигация", en: "Navigation" },
@@ -32,6 +32,7 @@ const dictionary = {
   light: { ru: "Светлая", en: "Light" },
   dark: { ru: "Темная", en: "Dark" },
   appLanguage: { ru: "Язык приложения", en: "Application language" },
+  browserLanguage: { ru: "Автоматически — язык браузера", en: "Automatic — browser language" },
   russian: { ru: "Русский", en: "Russian" },
   english: { ru: "Английский", en: "English" },
   autoTranslate: { ru: "Автоперевод сообщений", en: "Message auto-translation" },
@@ -78,6 +79,18 @@ const dictionary = {
     en: "Krisp enables available browser noise suppression, echo cancellation and auto gain. Full Krisp SDK can be integrated separately.",
   },
 
+  friendRequestsEmpty: { ru: "Нет новых заявок", en: "No new friend requests" },
+  friendRequestAccept: { ru: "Принять", en: "Accept" },
+  friendRequestReject: { ru: "Отклонить", en: "Decline" },
+  friendRequestAccepted: { ru: "Заявка принята", en: "Friend request accepted" },
+  friendRequestRejected: { ru: "Заявка отклонена", en: "Friend request declined" },
+  incomingVideoCall: { ru: "Входящий видеозвонок", en: "Incoming video call" },
+  incomingVoiceCall: { ru: "Входящий голосовой звонок", en: "Incoming voice call" },
+  answerCall: { ru: "Ответить", en: "Answer" },
+  declineCall: { ru: "Отклонить", en: "Decline" },
+  personalCall: { ru: "Личный звонок", en: "Private call" },
+  groupCall: { ru: "Групповой звонок", en: "Group call" },
+
   answers: { ru: "Ответы", en: "Answers" },
   question: { ru: "Вопрос", en: "Question" },
   addAnswer: { ru: "Добавить ответ", en: "Add answer" },
@@ -89,11 +102,17 @@ const dictionary = {
 
 type TranslationKey = keyof typeof dictionary;
 
-export const translate = (key: TranslationKey, language: AppLanguage) =>
-  dictionary[key]?.[language] ?? dictionary[key]?.ru ?? key;
+export const translate = (key: TranslationKey, language: AppSettings["appLanguage"]) => {
+  const resolved = resolveAppLanguage(language);
+  return dictionary[key]?.[resolved] ?? dictionary[key]?.ru ?? key;
+};
 
 export const useAppSettings = () => {
   const [settings, setSettings] = useState<AppSettings>(readSettings);
+
+  useEffect(() => {
+    document.documentElement.lang = resolveAppLanguage(settings.appLanguage);
+  }, [settings.appLanguage]);
 
   useEffect(() => {
     const handleSettingsChange = (event: Event) => {
@@ -119,8 +138,9 @@ export const useAppSettings = () => {
 
 export const useI18n = () => {
   const settings = useAppSettings();
+  const language = resolveAppLanguage(settings.appLanguage);
   return {
-    language: settings.appLanguage,
+    language,
     t: (key: TranslationKey) => translate(key, settings.appLanguage),
   };
 };
