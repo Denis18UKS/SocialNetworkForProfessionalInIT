@@ -340,11 +340,27 @@ for attempt in {1..25}; do
 done
 
 echo "[10/10] Verifying the new domain"
-curl -fsS "https://${SITE_DOMAIN}/" | grep -q 'SocialBIRD'
-curl -fsS "https://${SITE_DOMAIN}/robots.txt" | grep -q "Sitemap: https://${SITE_DOMAIN}/sitemap.xml"
-curl -fsS "https://${SITE_DOMAIN}/sitemap.xml" | grep -q "https://${SITE_DOMAIN}/"
-curl -fsS "https://${API_DOMAIN}/push/public-key" | grep -q 'publicKey'
+VERIFY_DIR="$(mktemp -d)"
+cleanup_verify() { rm -rf "$VERIFY_DIR"; }
+trap 'cleanup_verify; rollback' ERR
 
+curl -fsS "https://${SITE_DOMAIN}/" -o "$VERIFY_DIR/site.html"
+grep -q 'SocialBIRD' "$VERIFY_DIR/site.html"
+echo "  OK site: https://${SITE_DOMAIN}/"
+
+curl -fsS "https://${SITE_DOMAIN}/robots.txt" -o "$VERIFY_DIR/robots.txt"
+grep -q "Sitemap: https://${SITE_DOMAIN}/sitemap.xml" "$VERIFY_DIR/robots.txt"
+echo "  OK robots.txt"
+
+curl -fsS "https://${SITE_DOMAIN}/sitemap.xml" -o "$VERIFY_DIR/sitemap.xml"
+grep -q "https://${SITE_DOMAIN}/" "$VERIFY_DIR/sitemap.xml"
+echo "  OK sitemap.xml"
+
+curl -fsS "https://${API_DOMAIN}/push/public-key" -o "$VERIFY_DIR/push.json"
+grep -q 'publicKey' "$VERIFY_DIR/push.json"
+echo "  OK API: https://${API_DOMAIN}/push/public-key"
+
+cleanup_verify
 trap - ERR
 chown -R "$APP_USER:socialbird" src public dist 2>/dev/null || true
 
