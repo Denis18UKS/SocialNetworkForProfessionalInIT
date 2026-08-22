@@ -18,6 +18,7 @@ import Users from "./pages/Users";
 import UserProfilePage from "./pages/UsersProfiles";
 import Xakatons from "./pages/Xakatons";
 import FriendRequests from "./pages/FriendRequests";
+import FriendQrLanding from "./pages/FriendQrLanding";
 import Blacklist from "./pages/Blacklist";
 import Forum from "./pages/Forum";
 import Answers from './pages/Answers';
@@ -27,6 +28,7 @@ import GroupChats from './pages/GroupChats';
 import Settings from './pages/Settings';
 import OnlineCompiler from './pages/OnlineCompiler';
 import RealtimeNotifications from './components/RealtimeNotifications';
+import PushCallRegistration from './components/PushCallRegistration';
 import { AuthProvider } from "@/pages/AuthContext";
 
 const queryClient = new QueryClient();
@@ -73,6 +75,7 @@ const AppLayout = () => {
   return (
     <>
       <RealtimeNotifications />
+      <PushCallRegistration />
       <SidebarProvider>
         <div className="app-visual-viewport flex w-full overflow-hidden bg-background dark:bg-gray-950">
           <AppSidebar />
@@ -95,6 +98,7 @@ const AppLayout = () => {
                 <Route path="/users-profiles/:username" element={<UserProfilePage />} />
                 <Route path="/xakatons" element={<Xakatons />} />
                 <Route path="/friend-requests" element={<FriendRequests />} />
+                <Route path="/friend-qr/:token" element={<FriendQrLanding />} />
                 <Route path="/blacklist" element={<Blacklist />} />
                 <Route path="/forum" element={<Forum />} />
                 <Route path="/forums/:id/answers" element={<Answers />} />
