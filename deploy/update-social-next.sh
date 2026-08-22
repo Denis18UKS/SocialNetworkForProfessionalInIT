@@ -16,6 +16,8 @@ fi
 cd "$APP_DIR"
 install -d -o root -g root -m 0750 "$BACKUP_DIR"
 cp -a "$APP_DIR/src" "$BACKUP_DIR/src"
+cp -a "$APP_DIR/public" "$BACKUP_DIR/public"
+cp -a "$APP_DIR/index.html" "$BACKUP_DIR/index.html"
 cp -a "$APP_DIR/backend/server.js" "$BACKUP_DIR/server.js"
 [[ -f "$APP_DIR/backend/server.production.js" ]] && cp -a "$APP_DIR/backend/server.production.js" "$BACKUP_DIR/server.production.js"
 [[ -f "$APP_DIR/deploy/install.sh" ]] && cp -a "$APP_DIR/deploy/install.sh" "$BACKUP_DIR/install.sh"
@@ -24,8 +26,10 @@ cp -a "$BACKEND_ENV" "$BACKUP_DIR/backend.env"
 
 rollback() {
   echo "Social-next update failed; restoring previous live version..." >&2
-  rm -rf "$APP_DIR/src"
+  rm -rf "$APP_DIR/src" "$APP_DIR/public"
   cp -a "$BACKUP_DIR/src" "$APP_DIR/src"
+  cp -a "$BACKUP_DIR/public" "$APP_DIR/public"
+  cp -a "$BACKUP_DIR/index.html" "$APP_DIR/index.html"
   cp -a "$BACKUP_DIR/server.js" "$APP_DIR/backend/server.js"
   [[ -f "$BACKUP_DIR/server.production.js" ]] && cp -a "$BACKUP_DIR/server.production.js" "$APP_DIR/backend/server.production.js"
   [[ -f "$BACKUP_DIR/install.sh" ]] && cp -a "$BACKUP_DIR/install.sh" "$APP_DIR/deploy/install.sh"
@@ -34,7 +38,7 @@ rollback() {
     rm -rf "$APP_DIR/dist"
     cp -a "$BACKUP_DIR/dist" "$APP_DIR/dist"
   fi
-  chown -R "$APP_USER:$APP_USER" "$APP_DIR/src" "$APP_DIR/dist" 2>/dev/null || true
+  chown -R "$APP_USER:$APP_USER" "$APP_DIR/src" "$APP_DIR/public" "$APP_DIR/index.html" "$APP_DIR/dist" 2>/dev/null || true
   chown "$APP_USER:$APP_USER" "$APP_DIR/backend/server.js" "$APP_DIR/backend/server.production.js" 2>/dev/null || true
   chown root:socialbird "$BACKEND_ENV" 2>/dev/null || true
   chmod 0640 "$BACKEND_ENV" 2>/dev/null || true
@@ -145,7 +149,8 @@ PUSH_STATUS="$(curl -fsS http://127.0.0.1:5000/push/public-key)"
 printf '%s\n' "$PUSH_STATUS" | grep -q 'publicKey'
 MAIL_STATUS="$(curl -fsS http://127.0.0.1:5000/password-reset/mail-status || true)"
 printf 'Mail recovery: %s\n' "$MAIL_STATUS"
-curl -fsS http://127.0.0.1:5000/profile >/dev/null 2>&1 || true
+command -v qrencode >/dev/null
+command -v zbarimg >/dev/null
 
 echo "[10/10] Final status"
 sudo -u "$APP_USER" env PM2_HOME="$PM2_HOME_DIR" pm2 status
