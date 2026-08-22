@@ -14,24 +14,63 @@ if [[ ! -f "$ENV_FILE" ]]; then
   exit 1
 fi
 
-read -r -p "SMTP host: " SMTP_HOST
+read -r -p "SMTP host [smtp.mail.ru]: " SMTP_HOST
+SMTP_HOST="${SMTP_HOST:-smtp.mail.ru}"
+if [[ "${SMTP_HOST,,}" == "smpt.mail.ru" ]]; then
+  echo "Detected typo 'smpt.mail.ru'; using 'smtp.mail.ru'."
+  SMTP_HOST="smtp.mail.ru"
+fi
+
 read -r -p "SMTP port [465]: " SMTP_PORT
 SMTP_PORT="${SMTP_PORT:-465}"
-read -r -p "TLS immediately (secure=true)? [Y/n]: " SMTP_TLS_ANSWER
-case "${SMTP_TLS_ANSWER:-Y}" in
-  n|N|no|NO) SMTP_SECURE=false ;;
-  *) SMTP_SECURE=true ;;
-esac
+
+if [[ "${SMTP_HOST,,}" == "smtp.mail.ru" ]]; then
+  if [[ "$SMTP_PORT" != "465" ]]; then
+    echo "Mail.ru officially uses SMTP 465 with SSL/TLS; switching port to 465."
+  fi
+  SMTP_PORT=465
+  SMTP_SECURE=true
+else
+  case "$SMTP_PORT" in
+    465)
+      SMTP_SECURE=true
+      ;;
+    587)
+      SMTP_SECURE=false
+      ;;
+    *)
+      read -r -p "TLS immediately (secure=true)? [Y/n]: " SMTP_TLS_ANSWER
+      case "${SMTP_TLS_ANSWER:-Y}" in
+        n|N|no|NO) SMTP_SECURE=false ;;
+        *) SMTP_SECURE=true ;;
+      esac
+      ;;
+  esac
+fi
+
+echo "Using SMTP: ${SMTP_HOST}:${SMTP_PORT}, secure=${SMTP_SECURE}"
 read -r -p "SMTP user / mailbox: " SMTP_USER
-read -r -s -p "SMTP app password (input hidden): " SMTP_PASSWORD
+read -r -s -p "SMTP app password (input hidden; paste and press Enter): " SMTP_PASSWORD
 echo
 read -r -p "From address [$SMTP_USER]: " SMTP_FROM
 SMTP_FROM="${SMTP_FROM:-$SMTP_USER}"
 read -r -p "Send test email to [$SMTP_USER]: " TEST_TO
 TEST_TO="${TEST_TO:-$SMTP_USER}"
 
-if [[ -z "$SMTP_HOST" || -z "$SMTP_USER" || -z "$SMTP_PASSWORD" ]]; then
-  echo "SMTP host, user and app password are required." >&2
+if [[ -z "$SMTP_HOST" || -z "$SMTP_USER" ]]; then
+  echo "SMTP host and user are required." >&2
+  exit 1
+fi
+if [[ -z "$SMTP_PASSWORD" ]]; then
+  echo "The script received an EMPTY app password. Hidden input shows no characters; paste the app password and press Enter." >&2
+  exit 1
+fi
+if [[ ! "$SMTP_USER" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]]; then
+  echo "SMTP user must be a full email address." >&2
+  exit 1
+fi
+if [[ ! "$TEST_TO" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]]; then
+  echo "Test recipient must be a valid email address (for example user@example.com)." >&2
   exit 1
 fi
 
@@ -72,14 +111,18 @@ for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
   const index = line.indexOf('=');
   env[line.slice(0, index).trim()] = line.slice(index + 1);
 }
+const port = Number(env.SMTP_PORT || 465);
+const secure = String(env.SMTP_SECURE || 'true').toLowerCase() === 'true';
 const transporter = nodemailer.createTransport({
   host: env.SMTP_HOST,
-  port: Number(env.SMTP_PORT || 465),
-  secure: String(env.SMTP_SECURE || 'true').toLowerCase() === 'true',
+  port,
+  secure,
+  requireTLS: !secure && port === 587,
   connectionTimeout: 10000,
   greetingTimeout: 10000,
   socketTimeout: 15000,
   auth: { user: env.SMTP_USER, pass: env.SMTP_PASSWORD },
+  tls: { servername: env.SMTP_HOST },
 });
 (async () => {
   await transporter.verify();
@@ -91,7 +134,16 @@ const transporter = nodemailer.createTransport({
   });
   console.log('SMTP verified. Test message accepted by server:', info.messageId || 'ok');
 })().catch((error) => {
-  console.error('SMTP test failed:', error.message);
+  const message = String(error?.message || error);
+  if (/application password|parol prilozheniya|535 5\.7\.0/i.test(message)) {
+    console.error('SMTP authentication failed: Mail.ru requires a PASSWORD FOR EXTERNAL APPLICATIONS, not the normal mailbox password.');
+  } else if (/wrong version number/i.test(message)) {
+    console.error('SMTP TLS mode/port mismatch. Mail.ru should use smtp.mail.ru:465 with secure=true.');
+  } else if (/ENOTFOUND|getaddrinfo/i.test(message)) {
+    console.error('SMTP host not found. For Mail.ru use exactly: smtp.mail.ru');
+  } else {
+    console.error('SMTP test failed:', message);
+  }
   process.exit(1);
 });
 NODE
