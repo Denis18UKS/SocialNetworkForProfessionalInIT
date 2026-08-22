@@ -1,0 +1,12 @@
+User-agent: *
+Allow: /
+Disallow: /admin/
+Disallow: /chats/
+Disallow: /group-chats/
+Disallow: /profile
+Disallow: /friend-requests
+Disallow: /friend-qr/
+Disallow: /blacklist
+Disallow: /settings
+
+Sitemap: https://socialbird.31.207.74.138.nip.io/sitemap.xml
