@@ -18,6 +18,9 @@ const files = [
   'android-app/app/src/main/java/io/itbird/socialbird/BackgroundMessagingService.java',
   'deploy/install.sh',
   'deploy/update-native-parity-seo.sh',
+  'deploy/update-native-android-complete.sh',
+  '.github/workflows/production-build.yml',
+  '.github/workflows/android-apk.yml',
 ];
 
 let changed = 0;
