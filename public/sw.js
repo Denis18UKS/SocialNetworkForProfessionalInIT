@@ -6,30 +6,39 @@ self.addEventListener('push', (event) => {
     data = { title: 'IT-BIRD', body: event.data ? event.data.text() : '' };
   }
 
-  const title = data.title || 'IT-BIRD';
-  const options = {
-    body: data.body || 'Новое уведомление',
-    icon: '/favicon.ico',
-    badge: '/favicon.ico',
-    tag: data.tag || 'itbird-notification',
-    renotify: true,
-    requireInteraction: data.type === 'incoming-call',
-    silent: false,
-    vibrate: data.type === 'incoming-call' ? [700, 250, 700, 250, 900] : [250],
-    data: {
-      url: data.url || '/',
-      type: data.type || 'notification',
-      call: data.call || null,
-    },
-    actions: data.type === 'incoming-call'
-      ? [
-          { action: 'answer', title: 'Ответить' },
-          { action: 'dismiss', title: 'Отклонить' },
-        ]
-      : [],
-  };
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const visible = windows.find((client) => client.visibilityState === 'visible' && client.focused !== false);
+    if (visible && data.type === 'incoming-call') {
+      visible.postMessage({ type: 'ITBIRD_PUSH_CALL_VISIBLE', call: data.call || null });
+      return;
+    }
 
-  event.waitUntil(self.registration.showNotification(title, options));
+    const title = data.title || 'IT-BIRD';
+    const options = {
+      body: data.body || 'Новое уведомление',
+      icon: '/favicon.ico',
+      badge: '/favicon.ico',
+      tag: data.tag || 'itbird-notification',
+      renotify: true,
+      requireInteraction: data.type === 'incoming-call',
+      silent: false,
+      vibrate: data.type === 'incoming-call' ? [700, 250, 700, 250, 900] : [250],
+      data: {
+        url: data.url || '/',
+        type: data.type || 'notification',
+        call: data.call || null,
+      },
+      actions: data.type === 'incoming-call'
+        ? [
+            { action: 'answer', title: 'Ответить' },
+            { action: 'dismiss', title: 'Отклонить' },
+          ]
+        : [],
+    };
+
+    await self.registration.showNotification(title, options);
+  })());
 });
 
 self.addEventListener('notificationclick', (event) => {
