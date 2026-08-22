@@ -69,6 +69,7 @@ sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   backend/compiler-client.js \
   ecosystem.config.cjs \
   src/components/PasswordRecovery.tsx \
+  deploy/install.sh \
   deploy/apply-mail-recovery-fixes.mjs \
   deploy/configure-mail.sh \
   deploy/generate-owner-recovery-codes.mjs \
