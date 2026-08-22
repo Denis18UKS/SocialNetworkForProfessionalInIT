@@ -2,12 +2,12 @@ import React, { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { useNavigate } from "react-router-dom";
 import { AlertTriangle, UserPlus, UserX } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { motion } from "framer-motion";
 import { jwtDecode } from "jwt-decode";
 import { getWsUrl } from "@/lib/settings";
+import { useI18n } from "@/lib/i18n";
 
 interface FriendRequest {
     id: number;
@@ -30,7 +30,7 @@ const FriendRequests = () => {
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const { toast } = useToast();
-    const navigate = useNavigate();
+    const { t } = useI18n();
 
     const formatRequest = (req: any, index: number): FriendRequest => ({
         id: req.id || req.user_id || index,
@@ -39,7 +39,7 @@ const FriendRequests = () => {
         status: req.status,
         created_at: req.created_at || "",
         friend: {
-            username: req.user_name || req.friend_name,
+            username: req.user_name || req.friend_name || "User",
             avatar: req.avatar || null,
         },
     });
@@ -48,7 +48,6 @@ const FriendRequests = () => {
         const fetchFriendRequests = async () => {
             const token = localStorage.getItem("token");
             if (!token) {
-                console.error("Нет токена!");
                 setIsLoading(false);
                 setError("Вы не авторизованы. Пожалуйста, войдите в систему.");
                 return;
@@ -66,31 +65,19 @@ const FriendRequests = () => {
                 }
 
                 if (!response.ok) throw new Error(`Ошибка: ${response.status}`);
-
                 const data = await response.json();
-                console.log("Ответ сервера:", data);
-
-                if (!Array.isArray(data)) {
-                    throw new Error("Неверная структура данных");
-                }
-
-                const formattedRequests = data.map(formatRequest);
-
-                setFriendRequests(formattedRequests);
-                setIsLoading(false);
+                if (!Array.isArray(data)) throw new Error("Неверная структура данных");
+                setFriendRequests(data.map(formatRequest));
             } catch (error) {
                 console.error("Ошибка загрузки заявок:", error);
                 setError("Не удалось загрузить заявки в друзья. Попробуйте позже.");
+                toast({ title: "Ошибка", description: "Не удалось загрузить заявки", variant: "destructive" });
+            } finally {
                 setIsLoading(false);
-                toast({
-                    title: "Ошибка",
-                    description: "Не удалось загрузить заявки",
-                    variant: "destructive",
-                });
             }
         };
 
-        fetchFriendRequests();
+        void fetchFriendRequests();
     }, [toast]);
 
     useEffect(() => {
@@ -105,17 +92,15 @@ const FriendRequests = () => {
         }
 
         const socket = new WebSocket(getWsUrl());
-
+        socket.onopen = () => socket.send(JSON.stringify({ type: "AUTH", token }));
         socket.onmessage = (event) => {
             const notification = JSON.parse(event.data);
             if (notification.type !== "FRIEND_REQUEST_CREATED") return;
-            if (notification.data.recipientId !== currentUserId) return;
+            if (notification.data.recipientId !== currentUserId && !notification.data.recipientIds?.includes(currentUserId)) return;
 
             const incomingRequest = formatRequest(notification.data.request, Date.now());
             setFriendRequests((prev) => {
-                if (prev.some((request) => request.user_id === incomingRequest.user_id)) {
-                    return prev;
-                }
+                if (prev.some((request) => request.user_id === incomingRequest.user_id)) return prev;
                 return [incomingRequest, ...prev];
             });
 
@@ -131,119 +116,93 @@ const FriendRequests = () => {
     const handleAcceptRequest = async (friendId: number) => {
         const token = localStorage.getItem("token");
         if (!token) return;
-
         try {
             const response = await fetch(`http://localhost:5000/friend-requests/accept/${friendId}`, {
                 method: "PATCH",
                 headers: { "Authorization": `Bearer ${token}` },
             });
-
             if (!response.ok) throw new Error(`Ошибка принятия: ${response.status}`);
-
             setFriendRequests(prev => prev.filter(req => req.user_id !== friendId));
-            toast({
-                title: "Заявка принята",
-                description: "Вы стали друзьями!",
-                variant: "default",
-            });
+            toast({ title: t("friendRequestAccepted"), description: "Вы стали друзьями!" });
         } catch (error) {
             console.error("Ошибка принятия заявки:", error);
-            toast({
-                title: "Ошибка",
-                description: "Не удалось принять заявку",
-                variant: "destructive",
-            });
+            toast({ title: "Ошибка", description: "Не удалось принять заявку", variant: "destructive" });
         }
     };
 
     const handleRejectRequest = async (friendId: number) => {
         const token = localStorage.getItem("token");
         if (!token) return;
-
         try {
             const response = await fetch(`http://localhost:5000/friend-requests/reject/${friendId}`, {
                 method: "PATCH",
                 headers: { "Authorization": `Bearer ${token}` },
             });
-
             if (!response.ok) throw new Error(`Ошибка отклонения: ${response.status}`);
-
             setFriendRequests(prev => prev.filter(req => req.user_id !== friendId));
-            toast({
-                title: "Заявка отклонена",
-                description: "Вы отклонили заявку на дружбу.",
-                variant: "destructive",
-            });
+            toast({ title: t("friendRequestRejected"), description: "", variant: "destructive" });
         } catch (error) {
             console.error("Ошибка отклонения заявки:", error);
-            toast({
-                title: "Ошибка",
-                description: "Не удалось отклонить заявку",
-                variant: "destructive",
-            });
+            toast({ title: "Ошибка", description: "Не удалось отклонить заявку", variant: "destructive" });
         }
     };
 
-    const goBackToProfile = () => {
-        navigate("/profile");
-    };
-
     return (
-        <div className="min-h-full bg-gray-50 p-0 dark:bg-gray-900 sm:p-2 lg:p-4">
-            <div className="max-w-4xl mx-auto">
-                <Card className="shadow-lg">
-                    <CardHeader className="border-b">
-                        <CardTitle className="text-2xl flex items-center gap-2">
-                            <UserPlus className="w-6 h-6" />
-                            Заявки в друзья
+        <div className="min-h-full w-full min-w-0 overflow-x-hidden bg-gray-50 p-0 dark:bg-gray-900 sm:p-2 lg:p-4">
+            <div className="mx-auto w-full min-w-0 max-w-4xl">
+                <Card className="w-full min-w-0 overflow-hidden shadow-lg">
+                    <CardHeader className="min-w-0 border-b px-3 py-4 sm:px-6">
+                        <CardTitle className="flex min-w-0 items-center gap-2 text-xl sm:text-2xl">
+                            <UserPlus className="h-5 w-5 shrink-0 sm:h-6 sm:w-6" />
+                            <span className="min-w-0 break-words">{t("friendRequests")}</span>
                         </CardTitle>
                     </CardHeader>
-                    <CardContent className="p-0">
-                        {friendRequests.length === 0 ? (
-                            <div className="p-8 text-center text-gray-500 dark:text-gray-400">
-                                <AlertTriangle className="mx-auto h-12 w-12 mb-4" />
-                                <p className="text-lg">Нет новых заявок</p>
+                    <CardContent className="min-w-0 p-0">
+                        {isLoading ? (
+                            <div className="p-6 text-center text-sm text-muted-foreground">...</div>
+                        ) : error ? (
+                            <div className="p-4 text-center text-sm text-destructive sm:p-6">{error}</div>
+                        ) : friendRequests.length === 0 ? (
+                            <div className="p-6 text-center text-gray-500 dark:text-gray-400 sm:p-8">
+                                <AlertTriangle className="mx-auto mb-3 h-10 w-10 sm:h-12 sm:w-12" />
+                                <p className="text-base sm:text-lg">{t("friendRequestsEmpty")}</p>
                             </div>
                         ) : (
-                            <ul className="divide-y divide-gray-200 dark:divide-gray-700">
+                            <ul className="min-w-0 divide-y divide-gray-200 dark:divide-gray-700">
                                 {friendRequests.map((request) => (
                                     <motion.li
                                         key={request.user_id}
                                         initial={{ opacity: 0, y: 10 }}
                                         animate={{ opacity: 1, y: 0 }}
-                                        className="p-4 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+                                        className="min-w-0 p-3 transition-colors hover:bg-gray-50 dark:hover:bg-gray-800 sm:p-4"
                                     >
-                                        <div className="flex items-center justify-between">
-                                            <div className="flex items-center gap-3">
-                        <Avatar>
-                            {request.friend.avatar && (
-                                <AvatarImage src={`http://localhost:5000${request.friend.avatar}`} />
-                            )}
-                            <AvatarFallback>
-                                                        {request.friend.username.charAt(0)}
-                                                    </AvatarFallback>
+                                        <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                            <div className="flex w-full min-w-0 items-center gap-3 sm:w-auto sm:flex-1">
+                                                <Avatar className="h-10 w-10 shrink-0 sm:h-11 sm:w-11">
+                                                    {request.friend.avatar && <AvatarImage src={`http://localhost:5000${request.friend.avatar}`} />}
+                                                    <AvatarFallback>{request.friend.username.charAt(0)}</AvatarFallback>
                                                 </Avatar>
-                                                <div>
-                                                    <p className="font-medium">{request.friend.username}</p>
+                                                <div className="min-w-0 flex-1">
+                                                    <p className="min-w-0 break-words font-medium leading-tight sm:truncate">{request.friend.username}</p>
                                                 </div>
                                             </div>
-                                            <div className="flex gap-2">
+                                            <div className="grid w-full min-w-0 grid-cols-2 gap-2 sm:flex sm:w-auto sm:shrink-0">
                                                 <Button
                                                     size="sm"
-                                                    className="gap-1 bg-green-600 hover:bg-green-700"
+                                                    className="min-w-0 w-full gap-1 bg-green-600 px-2 hover:bg-green-700 sm:w-auto sm:px-3"
                                                     onClick={() => handleAcceptRequest(request.user_id)}
                                                 >
-                                                    <UserPlus className="h-4 w-4" />
-                                                    Принять
+                                                    <UserPlus className="h-4 w-4 shrink-0" />
+                                                    <span className="truncate">{t("friendRequestAccept")}</span>
                                                 </Button>
                                                 <Button
                                                     size="sm"
                                                     variant="destructive"
-                                                    className="gap-1"
+                                                    className="min-w-0 w-full gap-1 px-2 sm:w-auto sm:px-3"
                                                     onClick={() => handleRejectRequest(request.user_id)}
                                                 >
-                                                    <UserX className="h-4 w-4" />
-                                                    Отклонить
+                                                    <UserX className="h-4 w-4 shrink-0" />
+                                                    <span className="truncate">{t("friendRequestReject")}</span>
                                                 </Button>
                                             </div>
                                         </div>
