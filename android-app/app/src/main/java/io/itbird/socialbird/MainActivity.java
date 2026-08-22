@@ -3,6 +3,8 @@ package io.itbird.socialbird;
 import android.Manifest;
 import android.app.Activity;
 import android.app.DownloadManager;
+import android.app.NotificationManager;
+import android.app.PictureInPictureParams;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -25,9 +27,12 @@ import android.os.Environment;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Process;
+import android.provider.Settings;
 import android.util.Base64;
 import android.util.DisplayMetrics;
+import android.util.Rational;
 import android.view.ViewGroup;
+import android.view.WindowManager;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
@@ -54,10 +59,14 @@ public class MainActivity extends Activity {
     private static final int REQUEST_WEB_MEDIA = 3001;
     private static final int REQUEST_FILE_CHOOSER = 3002;
     private static final int REQUEST_SCREEN_CAPTURE = 3003;
+    private static final int REQUEST_NOTIFICATIONS = 3004;
     private static final long FRAME_INTERVAL_MS = 100L;
     private static final int MAX_CAPTURE_WIDTH = 720;
     private static final int PLAYBACK_SAMPLE_RATE = 48000;
     private static final int PLAYBACK_CHANNELS = 2;
+
+    private static volatile boolean activityVisible = false;
+    private static volatile boolean pictureInPictureVisible = false;
 
     private WebView webView;
     private PermissionRequest pendingWebPermissionRequest;
@@ -73,11 +82,21 @@ public class MainActivity extends Activity {
     private volatile boolean playbackAudioActive = false;
     private long lastFrameAt = 0L;
     private boolean screenCaptureActive = false;
+    private boolean callActive = false;
+
+    public static boolean isVisible() {
+        return activityVisible || pictureInPictureVisible;
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         projectionManager = (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true);
+            setTurnScreenOn(true);
+        }
 
         FrameLayout root = new FrameLayout(this);
         webView = new WebView(this);
@@ -102,7 +121,7 @@ public class MainActivity extends Activity {
         settings.setAllowContentAccess(true);
         settings.setBuiltInZoomControls(false);
         settings.setDisplayZoomControls(false);
-        settings.setUserAgentString(settings.getUserAgentString() + " SocialBIRDAndroid/1.0.0");
+        settings.setUserAgentString(settings.getUserAgentString() + " SocialBIRDAndroid/" + BuildConfig.VERSION_NAME);
 
         CookieManager cookieManager = CookieManager.getInstance();
         cookieManager.setAcceptCookie(true);
@@ -125,6 +144,12 @@ public class MainActivity extends Activity {
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
                 super.onPageStarted(view, url, favicon);
                 if (!url.startsWith(SITE_ORIGIN)) stopScreenCapture(true);
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                callJs("window.dispatchEvent(new Event('itbird-native-ready')); ");
             }
         });
 
@@ -223,9 +248,17 @@ public class MainActivity extends Activity {
         requestPermissions(androidPermissions.toArray(new String[0]), REQUEST_WEB_MEDIA);
     }
 
+    private void ensureNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+            && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[] { Manifest.permission.POST_NOTIFICATIONS }, REQUEST_NOTIFICATIONS);
+        }
+    }
+
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQUEST_NOTIFICATIONS) return;
         if (requestCode != REQUEST_WEB_MEDIA || pendingWebPermissionRequest == null) return;
 
         boolean granted = grantResults.length > 0;
@@ -481,6 +514,75 @@ public class MainActivity extends Activity {
         runOnUiThread(() -> webView.evaluateJavascript(script, null));
     }
 
+    private void setNativeCallActive(boolean active) {
+        callActive = active;
+        BackgroundMessagingService.setCallActive(this, active);
+        runOnUiThread(() -> {
+            if (active) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            configurePictureInPicture(active);
+        });
+    }
+
+    private void configurePictureInPicture(boolean active) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+        PictureInPictureParams.Builder builder = new PictureInPictureParams.Builder()
+            .setAspectRatio(new Rational(16, 9));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            builder.setAutoEnterEnabled(active);
+            builder.setSeamlessResizeEnabled(true);
+        }
+        setPictureInPictureParams(builder.build());
+    }
+
+    private void enterCallPictureInPicture() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+        try {
+            enterPictureInPictureMode(new PictureInPictureParams.Builder()
+                .setAspectRatio(new Rational(16, 9))
+                .build());
+        } catch (Exception ignored) {}
+    }
+
+    private boolean canUseFullScreenCalls() {
+        if (Build.VERSION.SDK_INT < 34) return true;
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        return manager != null && manager.canUseFullScreenIntent();
+    }
+
+    private void openFullScreenCallSettings() {
+        try {
+            if (Build.VERSION.SDK_INT >= 34) {
+                Intent intent = new Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT)
+                    .setData(Uri.parse("package:" + getPackageName()));
+                startActivity(intent);
+            } else {
+                openNotificationSettings();
+            }
+        } catch (Exception ignored) {
+            openNotificationSettings();
+        }
+    }
+
+    private void openNotificationSettings() {
+        try {
+            Intent intent = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                .putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName());
+            startActivity(intent);
+        } catch (Exception ignored) {}
+    }
+
+    private void openBatterySettings() {
+        try {
+            startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+        } catch (Exception ignored) {
+            try {
+                startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                    .setData(Uri.parse("package:" + getPackageName())));
+            } catch (Exception ignoredAgain) {}
+        }
+    }
+
     private final class NativeBridge {
         @JavascriptInterface
         public boolean isNativeApp() {
@@ -489,7 +591,57 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public String getVersion() {
-            return "1.0.0";
+            return BuildConfig.VERSION_NAME;
+        }
+
+        @JavascriptInterface
+        public void syncAuthToken(String token) {
+            runOnUiThread(() -> {
+                String normalized = token == null ? "" : token.trim();
+                if (!normalized.isEmpty()) ensureNotificationPermission();
+                BackgroundMessagingService.syncAuth(MainActivity.this, normalized);
+            });
+        }
+
+        @JavascriptInterface
+        public void setAppLanguage(String language) {
+            BackgroundMessagingService.syncLanguage(MainActivity.this, language);
+        }
+
+        @JavascriptInterface
+        public void setCallActive(boolean active) {
+            setNativeCallActive(active);
+        }
+
+        @JavascriptInterface
+        public boolean canPostNotifications() {
+            return Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+                || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED;
+        }
+
+        @JavascriptInterface
+        public boolean canUseFullScreenCalls() {
+            return MainActivity.this.canUseFullScreenCalls();
+        }
+
+        @JavascriptInterface
+        public void openNotificationSettings() {
+            runOnUiThread(MainActivity.this::openNotificationSettings);
+        }
+
+        @JavascriptInterface
+        public void openFullScreenCallSettings() {
+            runOnUiThread(MainActivity.this::openFullScreenCallSettings);
+        }
+
+        @JavascriptInterface
+        public void openBatterySettings() {
+            runOnUiThread(MainActivity.this::openBatterySettings);
+        }
+
+        @JavascriptInterface
+        public void enterPictureInPicture() {
+            runOnUiThread(MainActivity.this::enterCallPictureInPicture);
         }
 
         @JavascriptInterface
@@ -515,7 +667,45 @@ public class MainActivity extends Activity {
         super.onNewIntent(intent);
         setIntent(intent);
         Uri uri = intent != null ? intent.getData() : null;
+        if (intent != null && intent.getBooleanExtra("incoming_call", false)
+            && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true);
+            setTurnScreenOn(true);
+        }
         if (isTrustedUri(uri) && webView != null) webView.loadUrl(uri.toString());
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        activityVisible = true;
+        String token = getSharedPreferences(BackgroundMessagingService.PREFS, MODE_PRIVATE)
+            .getString(BackgroundMessagingService.PREF_AUTH_TOKEN, "");
+        if (token != null && !token.isBlank()) BackgroundMessagingService.syncAuth(this, token);
+    }
+
+    @Override
+    protected void onPause() {
+        activityVisible = false;
+        super.onPause();
+    }
+
+    @Override
+    public void onPictureInPictureModeChanged(boolean isInPictureInPictureMode, android.content.res.Configuration newConfig) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig);
+        pictureInPictureVisible = isInPictureInPictureMode;
+        callJs("document.documentElement.classList.toggle('itbird-native-pip', "
+            + (isInPictureInPictureMode ? "true" : "false") + ");"
+            + "window.dispatchEvent(new CustomEvent('itbird-native-pip-change',{detail:{active:"
+            + (isInPictureInPictureMode ? "true" : "false") + "}}));");
+    }
+
+    @Override
+    protected void onUserLeaveHint() {
+        super.onUserLeaveHint();
+        if (callActive && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            enterCallPictureInPicture();
+        }
     }
 
     @Override
@@ -526,6 +716,8 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        activityVisible = false;
+        pictureInPictureVisible = false;
         stopScreenCapture(false);
         if (fileChooserCallback != null) fileChooserCallback.onReceiveValue(null);
         fileChooserCallback = null;
