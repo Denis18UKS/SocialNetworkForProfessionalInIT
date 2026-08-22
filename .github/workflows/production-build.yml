@@ -36,7 +36,7 @@ jobs:
             package-lock.json
             backend/package-lock.json
 
-      - name: Apply application, mobile, call, mail, social, screen-share, delivery, UI, production and compiler fixes
+      - name: Apply application, mobile, call, mail, social, Android, production and compiler fixes
         run: |
           node deploy/apply-app-fixes.mjs
           node deploy/apply-mobile-layout-fixes.mjs
@@ -51,6 +51,7 @@ jobs:
           node deploy/apply-call-hangup-lifecycle-fix.mjs
           node deploy/apply-mobile-ui-media-fixes.mjs
           node deploy/apply-single-camera-tile-fix.mjs
+          node deploy/apply-native-android-integration.mjs
           node deploy/harden-source.mjs --in-place
           node deploy/enable-sandbox-compiler.mjs --in-place
           node deploy/patch-installer.mjs
@@ -71,6 +72,7 @@ jobs:
           node --check deploy/apply-call-hangup-lifecycle-fix.mjs
           node --check deploy/apply-mobile-ui-media-fixes.mjs
           node --check deploy/apply-single-camera-tile-fix.mjs
+          node --check deploy/apply-native-android-integration.mjs
           node --check deploy/ensure-vapid.mjs
           node --check deploy/generate-owner-recovery-codes.mjs
           node --check backend/server.js
@@ -93,6 +95,7 @@ jobs:
           bash -n deploy/update-call-hangup-lifecycle.sh
           bash -n deploy/update-mobile-ui-media.sh
           bash -n deploy/update-single-camera-tile.sh
+          bash -n deploy/update-android-app.sh
           bash -n deploy/configure-mail.sh
           node deploy/apply-call-mobile-upload-fixes.mjs
           node deploy/apply-call-video-mount-fix.mjs
@@ -103,6 +106,7 @@ jobs:
           node deploy/apply-call-hangup-lifecycle-fix.mjs
           node deploy/apply-mobile-ui-media-fixes.mjs
           node deploy/apply-single-camera-tile-fix.mjs
+          node deploy/apply-native-android-integration.mjs
           node deploy/harden-source.mjs
           node deploy/enable-sandbox-compiler.mjs
           node --check backend/server.production.js
@@ -161,10 +165,12 @@ jobs:
             src/components/CallTrackVideo.tsx \
             src/components/FriendQrTools.tsx \
             src/components/PushCallRegistration.tsx \
+            src/components/NativeAppBridge.tsx \
             src/components/RealtimeNotifications.tsx \
             src/components/VoiceCallControls.tsx \
             src/components/VoiceMessageBubble.tsx \
             src/components/PasswordRecovery.tsx \
+            src/pages/AndroidApp.tsx \
             src/pages/FriendRequests.tsx \
             src/pages/FriendQrLanding.tsx \
             src/pages/MyProfile.tsx \
@@ -174,6 +180,6 @@ jobs:
             src/pages/Chats.tsx \
             src/pages/GroupChats.tsx
           if ! git diff --cached --quiet; then
-            git commit -m "Apply generated production social, screen-share and mobile-call fixes"
+            git commit -m "Apply generated production social, Android and call fixes"
             git push origin HEAD:${GITHUB_REF_NAME}
           fi
