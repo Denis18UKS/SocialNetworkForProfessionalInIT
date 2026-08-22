@@ -30,6 +30,7 @@ import OnlineCompiler from './pages/OnlineCompiler';
 import AndroidApp from './pages/AndroidApp';
 import RealtimeNotifications from './components/RealtimeNotifications';
 import PushCallRegistration from './components/PushCallRegistration';
+import NativeAppBridge from './components/NativeAppBridge';
 import { AuthProvider } from "@/pages/AuthContext";
 
 const queryClient = new QueryClient();
@@ -75,6 +76,7 @@ const AppLayout = () => {
 
   return (
     <>
+      <NativeAppBridge />
       <RealtimeNotifications />
       <PushCallRegistration />
       <SidebarProvider>
