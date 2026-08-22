@@ -36,7 +36,7 @@ jobs:
             package-lock.json
             backend/package-lock.json
 
-      - name: Apply application, mobile, call, mail, social, screen-share, production and compiler fixes
+      - name: Apply application, mobile, call, mail, social, screen-share, delivery, production and compiler fixes
         run: |
           node deploy/apply-app-fixes.mjs
           node deploy/apply-mobile-layout-fixes.mjs
@@ -47,6 +47,7 @@ jobs:
           node deploy/apply-mail-recovery-fixes.mjs
           node deploy/apply-social-next-v2.mjs
           node deploy/apply-screen-share-audio-fixes.mjs
+          node deploy/apply-mobile-call-delivery-fix.mjs
           node deploy/harden-source.mjs --in-place
           node deploy/enable-sandbox-compiler.mjs --in-place
           node deploy/patch-installer.mjs
@@ -63,6 +64,7 @@ jobs:
           node --check deploy/apply-social-next-fixes.mjs
           node --check deploy/apply-social-next-v2.mjs
           node --check deploy/apply-screen-share-audio-fixes.mjs
+          node --check deploy/apply-mobile-call-delivery-fix.mjs
           node --check deploy/ensure-vapid.mjs
           node --check deploy/generate-owner-recovery-codes.mjs
           node --check backend/server.js
@@ -81,12 +83,14 @@ jobs:
           bash -n deploy/update-mail-recovery.sh
           bash -n deploy/update-social-next.sh
           bash -n deploy/update-screen-share.sh
+          bash -n deploy/update-mobile-call-delivery.sh
           bash -n deploy/configure-mail.sh
           node deploy/apply-call-mobile-upload-fixes.mjs
           node deploy/apply-call-video-mount-fix.mjs
           node deploy/apply-mail-recovery-fixes.mjs
           node deploy/apply-social-next-v2.mjs
           node deploy/apply-screen-share-audio-fixes.mjs
+          node deploy/apply-mobile-call-delivery-fix.mjs
           node deploy/harden-source.mjs
           node deploy/enable-sandbox-compiler.mjs
           node --check backend/server.production.js
@@ -126,6 +130,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add backend/server.js \
+            backend/social-next-features.js \
+            backend/offline-call-queue.js \
             deploy/install.sh \
             deploy/nginx-socialbird.conf.template \
             index.html \
@@ -135,6 +141,7 @@ jobs:
             src/lib/settings.ts \
             src/lib/i18n.ts \
             src/lib/webrtc.ts \
+            src/lib/reconnecting-websocket.ts \
             src/lib/call-audio-reliability.ts \
             src/lib/call-media-bus.ts \
             src/lib/screen-share.ts \
@@ -155,6 +162,6 @@ jobs:
             src/pages/Chats.tsx \
             src/pages/GroupChats.tsx
           if ! git diff --cached --quiet; then
-            git commit -m "Apply generated production social and screen-share fixes"
+            git commit -m "Apply generated production social, screen-share and mobile-call fixes"
             git push origin HEAD:${GITHUB_REF_NAME}
           fi
