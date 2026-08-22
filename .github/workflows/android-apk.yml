@@ -7,6 +7,7 @@ on:
       - deploy/socialbird-vps-production
     paths:
       - "android-app/**"
+      - "deploy/apply-android-runtime-fixes.mjs"
       - ".github/workflows/android-apk.yml"
 
 permissions:
@@ -24,6 +25,19 @@ jobs:
     steps:
       - name: Checkout production branch
         uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Apply native Android runtime integration
+        run: |
+          node --check deploy/apply-android-runtime-fixes.mjs
+          node deploy/apply-android-runtime-fixes.mjs
+          grep -q "NATIVE_ANDROID_RUNTIME: initialize-runtime" android-app/app/src/main/java/io/itbird/socialbird/MainActivity.java
+          grep -q "NATIVE_ANDROID_RUNTIME: answer-intent" android-app/app/src/main/java/io/itbird/socialbird/MainActivity.java
+          grep -q "NATIVE_ANDROID_RUNTIME: web-fullscreen" android-app/app/src/main/java/io/itbird/socialbird/MainActivity.java
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -66,7 +80,7 @@ jobs:
       - name: Build installable APK
         env:
           SOCIALBIRD_VERSION_CODE: ${{ github.run_number }}
-          SOCIALBIRD_VERSION_NAME: 1.0.${{ github.run_number }}
+          SOCIALBIRD_VERSION_NAME: 1.1.${{ github.run_number }}
         run: gradle -p android-app assembleDebug --no-daemon --stacktrace
 
       - name: Prepare stable APK name
@@ -90,6 +104,6 @@ jobs:
           else
             gh release create android-latest SocialBIRD-Android.apk \
               --title "SocialBIRD Android" \
-              --notes "Автоматическая APK-сборка Android-оболочки SocialBIRD. Для установки разрешите Android установку APK из браузера или файлового менеджера." \
+              --notes "Нативная Android-оболочка SocialBIRD: тот же production-интерфейс и аккаунт, системные входящие звонки/уведомления, PiP, MediaProjection, системный звук, камера/микрофон, загрузка и скачивание файлов." \
               --prerelease
           fi
