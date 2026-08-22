@@ -12,10 +12,16 @@ import android.os.IBinder;
 public class MediaProjectionService extends Service {
     public static final String CHANNEL_ID = "socialbird_screen_share";
     public static final int NOTIFICATION_ID = 2048;
+    private static volatile boolean foregroundReady = false;
+
+    public static boolean isForegroundReady() {
+        return foregroundReady;
+    }
 
     @Override
     public void onCreate() {
         super.onCreate();
+        foregroundReady = false;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationManager manager = getSystemService(NotificationManager.class);
             NotificationChannel channel = new NotificationChannel(
@@ -51,7 +57,14 @@ public class MediaProjectionService extends Service {
         } else {
             startForeground(NOTIFICATION_ID, notification);
         }
+        foregroundReady = true;
         return START_NOT_STICKY;
+    }
+
+    @Override
+    public void onDestroy() {
+        foregroundReady = false;
+        super.onDestroy();
     }
 
     @Override
