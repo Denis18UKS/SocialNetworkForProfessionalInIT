@@ -36,7 +36,7 @@ jobs:
             package-lock.json
             backend/package-lock.json
 
-      - name: Apply application, mobile, call, mail, social, Android, production and compiler fixes
+      - name: Apply application, mobile, call, mail, social, Android, SEO, production and compiler fixes
         run: |
           node deploy/apply-app-fixes.mjs
           node deploy/apply-mobile-layout-fixes.mjs
@@ -52,11 +52,12 @@ jobs:
           node deploy/apply-mobile-ui-media-fixes.mjs
           node deploy/apply-single-camera-tile-fix.mjs
           node deploy/apply-native-android-integration.mjs
+          node deploy/apply-seo-fixes.mjs
           node deploy/harden-source.mjs --in-place
           node deploy/enable-sandbox-compiler.mjs --in-place
           node deploy/patch-installer.mjs
 
-      - name: Check generated backend, runner and installer syntax
+      - name: Check generated backend, runner, Android/SEO helpers and installer syntax
         run: |
           node --check deploy/apply-app-fixes.mjs
           node --check deploy/apply-mobile-layout-fixes.mjs
@@ -74,6 +75,8 @@ jobs:
           node --check deploy/apply-single-camera-tile-fix.mjs
           node --check deploy/apply-native-android-integration.mjs
           node --check deploy/apply-android-runtime-fixes.mjs
+          node --check deploy/apply-seo-fixes.mjs
+          node --check scripts/generate-seo.mjs
           node --check deploy/ensure-vapid.mjs
           node --check deploy/generate-owner-recovery-codes.mjs
           node --check backend/server.js
@@ -98,6 +101,7 @@ jobs:
           bash -n deploy/update-single-camera-tile.sh
           bash -n deploy/update-android-app.sh
           bash -n deploy/update-native-android-complete.sh
+          bash -n deploy/update-native-parity-seo.sh
           bash -n deploy/configure-mail.sh
           node deploy/apply-call-mobile-upload-fixes.mjs
           node deploy/apply-call-video-mount-fix.mjs
@@ -109,6 +113,7 @@ jobs:
           node deploy/apply-mobile-ui-media-fixes.mjs
           node deploy/apply-single-camera-tile-fix.mjs
           node deploy/apply-native-android-integration.mjs
+          node deploy/apply-seo-fixes.mjs
           node deploy/harden-source.mjs
           node deploy/enable-sandbox-compiler.mjs
           node --check backend/server.production.js
@@ -118,7 +123,7 @@ jobs:
         env:
           PUPPETEER_SKIP_DOWNLOAD: "true"
 
-      - name: Build frontend
+      - name: Build frontend and SEO route HTML
         run: npm run build
         env:
           VITE_API_URL: https://api.31.207.74.138.nip.io
@@ -126,6 +131,18 @@ jobs:
           VITE_TURN_URLS: turn:api.31.207.74.138.nip.io:3478?transport=udp,turn:api.31.207.74.138.nip.io:3478?transport=tcp,turns:api.31.207.74.138.nip.io:5349?transport=tcp
           VITE_TURN_USERNAME: socialbird
           VITE_TURN_CREDENTIAL: ci-placeholder-only
+
+      - name: Verify SEO artifacts
+        run: |
+          test -s dist/robots.txt
+          test -s dist/sitemap.xml
+          test -s dist/android-app/index.html
+          test -s dist/compiler/index.html
+          test -s dist/xakatons/index.html
+          test -s dist/forum/index.html
+          grep -q 'rel="canonical"' dist/index.html
+          grep -q 'SocialBIRD — социальная сеть для IT-специалистов' dist/index.html
+          grep -q 'sitemap.xml' dist/robots.txt
 
       - name: Install backend dependencies
         run: npm ci
@@ -168,11 +185,13 @@ jobs:
             src/components/FriendQrTools.tsx \
             src/components/PushCallRegistration.tsx \
             src/components/NativeAppBridge.tsx \
+            src/components/SeoManager.tsx \
             src/components/RealtimeNotifications.tsx \
             src/components/VoiceCallControls.tsx \
             src/components/VoiceMessageBubble.tsx \
             src/components/PasswordRecovery.tsx \
             src/pages/AndroidApp.tsx \
+            src/pages/Index.tsx \
             src/pages/FriendRequests.tsx \
             src/pages/FriendQrLanding.tsx \
             src/pages/MyProfile.tsx \
@@ -182,6 +201,6 @@ jobs:
             src/pages/Chats.tsx \
             src/pages/GroupChats.tsx
           if ! git diff --cached --quiet; then
-            git commit -m "Apply generated production social, Android and call fixes"
+            git commit -m "Apply generated production social, Android, SEO and call fixes"
             git push origin HEAD:${GITHUB_REF_NAME}
           fi
