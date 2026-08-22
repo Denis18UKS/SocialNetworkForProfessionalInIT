@@ -37,6 +37,19 @@ if (realtime.includes(autoPermission)) {
   console.log('Removed automatic notification permission prompt.');
 }
 
+// Send the call push to every subscribed target. The service worker suppresses the
+// duplicate notification when a SocialBIRD window is actually visible. This is more
+// reliable on phones whose sleeping WebSocket may still look online for a short time.
+const featuresPath = path.join(root, 'backend', 'social-next-features.js');
+let features = fs.readFileSync(featuresPath, 'utf8');
+const onlineFilter = `        const uniqueTargets = Array.from(new Set((targetIds || []).map(Number).filter(Number.isFinite)))\n            .filter((userId) => !isUserOnline(userId));`;
+const allTargets = `        const uniqueTargets = Array.from(new Set((targetIds || []).map(Number).filter(Number.isFinite)));`;
+if (features.includes(onlineFilter)) {
+  features = features.replace(onlineFilter, allTargets);
+  fs.writeFileSync(featuresPath, features, 'utf8');
+  console.log('Enabled push fallback for sleeping mobile sockets.');
+}
+
 const installerPath = path.join(root, 'deploy', 'install.sh');
 let installer = fs.readFileSync(installerPath, 'utf8');
 const before = installer;
