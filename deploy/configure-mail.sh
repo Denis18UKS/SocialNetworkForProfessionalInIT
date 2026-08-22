@@ -32,12 +32,8 @@ if [[ "${SMTP_HOST,,}" == "smtp.mail.ru" ]]; then
   SMTP_SECURE=true
 else
   case "$SMTP_PORT" in
-    465)
-      SMTP_SECURE=true
-      ;;
-    587)
-      SMTP_SECURE=false
-      ;;
+    465) SMTP_SECURE=true ;;
+    587) SMTP_SECURE=false ;;
     *)
       read -r -p "TLS immediately (secure=true)? [Y/n]: " SMTP_TLS_ANSWER
       case "${SMTP_TLS_ANSWER:-Y}" in
@@ -50,8 +46,21 @@ fi
 
 echo "Using SMTP: ${SMTP_HOST}:${SMTP_PORT}, secure=${SMTP_SECURE}"
 read -r -p "SMTP user / mailbox: " SMTP_USER
+SMTP_USER="$(printf '%s' "$SMTP_USER" | tr -d '\r\n' | xargs)"
 read -r -s -p "SMTP app password (input hidden; paste and press Enter): " SMTP_PASSWORD
 echo
+
+if [[ "${SMTP_HOST,,}" == "smtp.mail.ru" ]]; then
+  RAW_PASSWORD_LENGTH=${#SMTP_PASSWORD}
+  SMTP_PASSWORD="$(printf '%s' "$SMTP_PASSWORD" | tr -d '[:space:]')"
+  CLEAN_PASSWORD_LENGTH=${#SMTP_PASSWORD}
+  if [[ "$RAW_PASSWORD_LENGTH" -ne "$CLEAN_PASSWORD_LENGTH" ]]; then
+    echo "Removed whitespace from copied Mail.ru app password (${RAW_PASSWORD_LENGTH} -> ${CLEAN_PASSWORD_LENGTH} characters)."
+  else
+    echo "App password received: ${CLEAN_PASSWORD_LENGTH} characters (value hidden)."
+  fi
+fi
+
 read -r -p "From address [$SMTP_USER]: " SMTP_FROM
 SMTP_FROM="${SMTP_FROM:-$SMTP_USER}"
 read -r -p "Send test email to [$SMTP_USER]: " TEST_TO
@@ -136,7 +145,11 @@ const transporter = nodemailer.createTransport({
 })().catch((error) => {
   const message = String(error?.message || error);
   if (/application password|parol prilozheniya|535 5\.7\.0/i.test(message)) {
-    console.error('SMTP authentication failed: Mail.ru requires a PASSWORD FOR EXTERNAL APPLICATIONS, not the normal mailbox password.');
+    console.error('SMTP authentication failed at Mail.ru AUTH stage. Connection/TLS are OK, but Mail.ru rejected the credential.');
+    console.error('Check Mail.ru -> Settings -> All settings -> Security:');
+    console.error('  1) External services: IMAP/POP/SMTP access must be enabled.');
+    console.error('  2) Create a NEW password in "Passwords for external applications" for mail access.');
+    console.error('  3) Paste that generated app password here, not the normal mailbox password or a 2FA/backup code.');
   } else if (/wrong version number/i.test(message)) {
     console.error('SMTP TLS mode/port mismatch. Mail.ru should use smtp.mail.ru:465 with secure=true.');
   } else if (/ENOTFOUND|getaddrinfo/i.test(message)) {
