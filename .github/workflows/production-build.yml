@@ -36,7 +36,7 @@ jobs:
             package-lock.json
             backend/package-lock.json
 
-      - name: Apply application, mobile, call, upload, mail, production and compiler fixes
+      - name: Apply application, mobile, call, mail, social, production and compiler fixes
         run: |
           node deploy/apply-app-fixes.mjs
           node deploy/apply-mobile-layout-fixes.mjs
@@ -45,6 +45,7 @@ jobs:
           node deploy/apply-call-mobile-upload-fixes.mjs
           node deploy/apply-call-video-mount-fix.mjs
           node deploy/apply-mail-recovery-fixes.mjs
+          node deploy/apply-social-next-v2.mjs
           node deploy/harden-source.mjs --in-place
           node deploy/enable-sandbox-compiler.mjs --in-place
           node deploy/patch-installer.mjs
@@ -58,9 +59,15 @@ jobs:
           node --check deploy/apply-call-mobile-upload-fixes.mjs
           node --check deploy/apply-call-video-mount-fix.mjs
           node --check deploy/apply-mail-recovery-fixes.mjs
+          node --check deploy/apply-social-next-fixes.mjs
+          node --check deploy/apply-social-next-v2.mjs
+          node --check deploy/ensure-vapid.mjs
           node --check deploy/generate-owner-recovery-codes.mjs
           node --check backend/server.js
           node --check backend/password-recovery.js
+          node --check backend/social-next-features.js
+          node --check backend/offline-call-queue.js
+          node --check backend/web-push-native.js
           node --check backend/compiler-client.js
           node --check deploy/compiler-runner/server.mjs
           node --check deploy/compiler-sandbox/runner.mjs
@@ -70,10 +77,12 @@ jobs:
           bash -n deploy/install.sh
           bash -n deploy/update-live-call-mobile-upload.sh
           bash -n deploy/update-mail-recovery.sh
+          bash -n deploy/update-social-next.sh
           bash -n deploy/configure-mail.sh
           node deploy/apply-call-mobile-upload-fixes.mjs
           node deploy/apply-call-video-mount-fix.mjs
           node deploy/apply-mail-recovery-fixes.mjs
+          node deploy/apply-social-next-v2.mjs
           node deploy/harden-source.mjs
           node deploy/enable-sandbox-compiler.mjs
           node --check backend/server.production.js
@@ -115,20 +124,32 @@ jobs:
           git add backend/server.js \
             deploy/install.sh \
             deploy/nginx-socialbird.conf.template \
+            index.html \
             src/App.tsx \
+            src/main.tsx \
             src/index.css \
+            src/lib/settings.ts \
+            src/lib/i18n.ts \
             src/lib/webrtc.ts \
             src/lib/call-audio-reliability.ts \
+            src/lib/call-media-bus.ts \
             src/components/AppSidebar.tsx \
+            src/components/CallTrackVideo.tsx \
+            src/components/FriendQrTools.tsx \
+            src/components/PushCallRegistration.tsx \
             src/components/RealtimeNotifications.tsx \
             src/components/VoiceCallControls.tsx \
             src/components/VoiceMessageBubble.tsx \
             src/components/PasswordRecovery.tsx \
+            src/pages/FriendRequests.tsx \
+            src/pages/FriendQrLanding.tsx \
+            src/pages/MyProfile.tsx \
+            src/pages/Settings.tsx \
             src/pages/Login.tsx \
             src/pages/Users.tsx \
             src/pages/Chats.tsx \
             src/pages/GroupChats.tsx
           if ! git diff --cached --quiet; then
-            git commit -m "Apply generated production mail recovery fixes"
+            git commit -m "Apply generated production social-next fixes"
             git push origin HEAD:${GITHUB_REF_NAME}
           fi
