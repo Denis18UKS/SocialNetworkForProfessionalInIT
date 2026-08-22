@@ -64,6 +64,9 @@ jobs:
           fi
 
       - name: Build installable APK
+        env:
+          SOCIALBIRD_VERSION_CODE: ${{ github.run_number }}
+          SOCIALBIRD_VERSION_NAME: 1.0.${{ github.run_number }}
         run: gradle -p android-app assembleDebug --no-daemon --stacktrace
 
       - name: Prepare stable APK name
