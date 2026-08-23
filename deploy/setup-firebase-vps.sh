@@ -17,17 +17,13 @@ if [[ ${EUID} -ne 0 ]]; then
   exit 1
 fi
 
-for command in firebase gcloud gh jq node curl; do
+for command in gcloud gh jq node curl openssl base64; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "Missing command: $command" >&2
     exit 2
   fi
 done
 
-if ! firebase projects:list >/dev/null 2>&1; then
-  echo "Firebase CLI is not authenticated. Run: firebase login --no-localhost" >&2
-  exit 3
-fi
 if ! gcloud auth list --filter=status:ACTIVE --format='value(account)' | grep -q .; then
   echo "Google Cloud CLI is not authenticated. Run: gcloud auth login --no-launch-browser" >&2
   exit 4
@@ -46,66 +42,98 @@ else
   gcloud projects create "$PROJECT_ID" --name="$DISPLAY_NAME"
 fi
 
-for attempt in {1..30}; do
-  if gcloud projects describe "$PROJECT_ID" >/dev/null 2>&1; then break; fi
-  if [[ "$attempt" -eq 30 ]]; then
-    echo "Google Cloud project did not become visible to gcloud." >&2
-    exit 6
-  fi
-  sleep 2
-done
-
 gcloud config set project "$PROJECT_ID" >/dev/null
 
-ACCESS_TOKEN="$(gcloud auth print-access-token)"
-FIREBASE_HTTP_STATUS="$(curl -sS -o /tmp/socialbird-firebase-project.json -w '%{http_code}' -H "Authorization: Bearer $ACCESS_TOKEN" "https://firebase.googleapis.com/v1beta1/projects/$PROJECT_ID")"
-if [[ "$FIREBASE_HTTP_STATUS" == "200" ]]; then
-  echo "Firebase resources are already enabled for $PROJECT_ID"
-else
-  echo "Adding Firebase resources to existing Google Cloud project"
-  if ! firebase projects:addfirebase "$PROJECT_ID"; then
-    echo >&2
-    echo "Failed to add Firebase resources to $PROJECT_ID." >&2
-    echo "The Google Cloud project itself already exists and will be reused; do NOT create another project." >&2
-    echo "If firebase-debug.log mentions Terms of Service / TOS / 403, open Firebase Console once with the same Google account and accept the Firebase Terms, then rerun:" >&2
-    echo "  bash deploy/setup-firebase-vps.sh $PROJECT_ID" >&2
-    echo "Debug tail:" >&2
-    tail -n 80 firebase-debug.log 2>/dev/null >&2 || true
-    exit 11
-  fi
+gcloud services enable serviceusage.googleapis.com cloudresourcemanager.googleapis.com firebase.googleapis.com --project "$PROJECT_ID"
+
+TOKEN="$(gcloud auth print-access-token)"
+FIREBASE_HTTP_STATUS="$(curl -sS -o /tmp/socialbird-firebase-project.json -w '%{http_code}' \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "x-goog-user-project: $PROJECT_ID" \
+  "https://firebase.googleapis.com/v1beta1/projects/$PROJECT_ID")"
+if [[ "$FIREBASE_HTTP_STATUS" != "200" ]]; then
+  echo "Firebase is not ready yet; running the quota-aware repair path."
+  bash deploy/repair-firebase-project-vps.sh "$PROJECT_ID"
+fi
+
+TOKEN="$(gcloud auth print-access-token)"
+FIREBASE_HTTP_STATUS="$(curl -sS -o /tmp/socialbird-firebase-project.json -w '%{http_code}' \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "x-goog-user-project: $PROJECT_ID" \
+  "https://firebase.googleapis.com/v1beta1/projects/$PROJECT_ID")"
+if [[ "$FIREBASE_HTTP_STATUS" != "200" ]]; then
+  echo "Firebase project is still unavailable after repair." >&2
+  cat /tmp/socialbird-firebase-project.json >&2 || true
+  exit 12
 fi
 rm -f /tmp/socialbird-firebase-project.json
 
-for attempt in {1..30}; do
-  ACCESS_TOKEN="$(gcloud auth print-access-token)"
-  FIREBASE_HTTP_STATUS="$(curl -sS -o /tmp/socialbird-firebase-project.json -w '%{http_code}' -H "Authorization: Bearer $ACCESS_TOKEN" "https://firebase.googleapis.com/v1beta1/projects/$PROJECT_ID")"
-  if [[ "$FIREBASE_HTTP_STATUS" == "200" ]]; then break; fi
-  if [[ "$attempt" -eq 30 ]]; then
-    echo "Firebase resources did not become ready for $PROJECT_ID." >&2
-    cat /tmp/socialbird-firebase-project.json >&2 || true
-    rm -f /tmp/socialbird-firebase-project.json
-    exit 12
-  fi
-  sleep 2
-done
-rm -f /tmp/socialbird-firebase-project.json
-
-echo "[2/10] Registering SocialBIRD Android app"
-if firebase apps:list android --project "$PROJECT_ID" --json 2>/dev/null | jq -e --arg pkg "$PACKAGE_NAME" '.result[]? | select(.packageName == $pkg)' >/dev/null 2>&1; then
-  echo "Android app already registered: $PACKAGE_NAME"
-else
-  firebase apps:create -a "$PACKAGE_NAME" android "$DISPLAY_NAME" --project "$PROJECT_ID"
+echo "[2/10] Registering SocialBIRD Android app through Firebase Management REST"
+TOKEN="$(gcloud auth print-access-token)"
+APPS_HTTP="$(curl -sS -o /tmp/socialbird-android-apps.json -w '%{http_code}' \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "x-goog-user-project: $PROJECT_ID" \
+  "https://firebase.googleapis.com/v1beta1/projects/$PROJECT_ID/androidApps")"
+if [[ "$APPS_HTTP" != "200" ]]; then
+  echo "Unable to list Firebase Android apps (HTTP $APPS_HTTP)." >&2
+  cat /tmp/socialbird-android-apps.json >&2 || true
+  exit 13
 fi
-rm -f "$SDK_CONFIG"
-firebase apps:sdkconfig android -o "$SDK_CONFIG" --project "$PROJECT_ID"
+
+APP_ID="$(jq -r --arg pkg "$PACKAGE_NAME" '.apps[]? | select(.packageName == $pkg and .state != "DELETED") | .appId' /tmp/socialbird-android-apps.json | head -n 1)"
+if [[ -z "$APP_ID" ]]; then
+  echo "Creating Android app: $PACKAGE_NAME"
+  TOKEN="$(gcloud auth print-access-token)"
+  CREATE_HTTP="$(curl -sS -o /tmp/socialbird-create-android.json -w '%{http_code}' -X POST \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "x-goog-user-project: $PROJECT_ID" \
+    -H 'Content-Type: application/json' \
+    --data-binary "{\"displayName\":\"$DISPLAY_NAME\",\"packageName\":\"$PACKAGE_NAME\"}" \
+    "https://firebase.googleapis.com/v1beta1/projects/$PROJECT_ID/androidApps")"
+  if [[ "$CREATE_HTTP" != "200" && "$CREATE_HTTP" != "201" && "$CREATE_HTTP" != "202" ]]; then
+    echo "Android app creation failed (HTTP $CREATE_HTTP)." >&2
+    cat /tmp/socialbird-create-android.json >&2 || true
+    exit 14
+  fi
+
+  for attempt in {1..40}; do
+    sleep 3
+    TOKEN="$(gcloud auth print-access-token)"
+    curl -fsS \
+      -H "Authorization: Bearer $TOKEN" \
+      -H "x-goog-user-project: $PROJECT_ID" \
+      "https://firebase.googleapis.com/v1beta1/projects/$PROJECT_ID/androidApps" \
+      -o /tmp/socialbird-android-apps.json
+    APP_ID="$(jq -r --arg pkg "$PACKAGE_NAME" '.apps[]? | select(.packageName == $pkg and .state != "DELETED") | .appId' /tmp/socialbird-android-apps.json | head -n 1)"
+    if [[ -n "$APP_ID" ]]; then break; fi
+  done
+fi
+
+if [[ -z "$APP_ID" ]]; then
+  echo "Firebase Android app did not become ready." >&2
+  exit 15
+fi
+
+echo "Android app id: $APP_ID"
+TOKEN="$(gcloud auth print-access-token)"
+CONFIG_HTTP="$(curl -sS -o /tmp/socialbird-android-config.json -w '%{http_code}' \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "x-goog-user-project: $PROJECT_ID" \
+  "https://firebase.googleapis.com/v1beta1/projects/$PROJECT_ID/androidApps/$APP_ID/config")"
+if [[ "$CONFIG_HTTP" != "200" ]]; then
+  echo "Firebase Android config download failed (HTTP $CONFIG_HTTP)." >&2
+  cat /tmp/socialbird-android-config.json >&2 || true
+  exit 16
+fi
+jq -r '.configFileContents' /tmp/socialbird-android-config.json | base64 -d > "$SDK_CONFIG"
 test -s "$SDK_CONFIG"
 
 CONFIG_PROJECT_ID="$(jq -r '.project_info.project_id // empty' "$SDK_CONFIG")"
 PROJECT_NUMBER="$(jq -r '.project_info.project_number // empty' "$SDK_CONFIG")"
-APP_ID="$(jq -r --arg pkg "$PACKAGE_NAME" '.client[] | select(.client_info.android_client_info.package_name == $pkg) | .client_info.mobilesdk_app_id' "$SDK_CONFIG" | head -n 1)"
+CONFIG_APP_ID="$(jq -r --arg pkg "$PACKAGE_NAME" '.client[] | select(.client_info.android_client_info.package_name == $pkg) | .client_info.mobilesdk_app_id' "$SDK_CONFIG" | head -n 1)"
 API_KEY="$(jq -r --arg pkg "$PACKAGE_NAME" '.client[] | select(.client_info.android_client_info.package_name == $pkg) | .api_key[0].current_key' "$SDK_CONFIG" | head -n 1)"
 
-for value in "$CONFIG_PROJECT_ID" "$PROJECT_NUMBER" "$APP_ID" "$API_KEY"; do
+for value in "$CONFIG_PROJECT_ID" "$PROJECT_NUMBER" "$CONFIG_APP_ID" "$API_KEY"; do
   if [[ -z "$value" || "$value" == "null" ]]; then
     echo "Firebase Android SDK config is incomplete." >&2
     exit 7
@@ -140,12 +168,11 @@ if ! grep -Fq '"configured":true' <<<"$STATUS"; then
   exit 9
 fi
 echo "$STATUS"
-
 shred -u "$SERVICE_KEY"
 
 echo "[6/10] Writing Firebase Android values to GitHub Actions variables"
 gh variable set SOCIALBIRD_FIREBASE_PROJECT_ID -R "$REPO" --body "$PROJECT_ID"
-gh variable set SOCIALBIRD_FIREBASE_APP_ID -R "$REPO" --body "$APP_ID"
+gh variable set SOCIALBIRD_FIREBASE_APP_ID -R "$REPO" --body "$CONFIG_APP_ID"
 gh variable set SOCIALBIRD_FIREBASE_API_KEY -R "$REPO" --body "$API_KEY"
 gh variable set SOCIALBIRD_FIREBASE_SENDER_ID -R "$REPO" --body "$PROJECT_NUMBER"
 
@@ -170,7 +197,7 @@ gh run watch "$RUN_ID" -R "$REPO" --exit-status
 echo "[9/10] Verifying published APK"
 curl -fsSL --range 0-0 -o /dev/null "https://github.com/Denis18UKS/SocialNetworkForProfessionalInIT/releases/download/android-latest/SocialBIRD-Android.apk"
 
-rm -f "$SDK_CONFIG"
+rm -f "$SDK_CONFIG" /tmp/socialbird-android-apps.json /tmp/socialbird-create-android.json /tmp/socialbird-android-config.json
 
 echo "[10/10] Completed"
 echo "Firebase project: $PROJECT_ID"
