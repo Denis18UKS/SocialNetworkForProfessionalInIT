@@ -50,6 +50,7 @@ if (fs.existsSync(installPath)) {
   const hardenCall = 'sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/harden-source.mjs"';
   const installCalls = [
     'sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/apply-chat-media-mobile-fix.mjs"',
+    'sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/apply-chat-media-backend-fix.mjs"',
     'sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/apply-native-android-integration.mjs"',
     'sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/apply-native-fcm-push.mjs"',
   ];
