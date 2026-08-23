@@ -35,7 +35,7 @@ const makeTransportFile = (file: File) => {
     const reserved = extension ? Array.from(extension).length : 0;
     const safeBaseLength = Math.max(16, MAX_TRANSPORT_FILENAME_CHARS - reserved);
     const shortBase = Array.from(base).slice(0, safeBaseLength).join('').trim() || 'file';
-    const transportName = `${shortBase}${extension}`;
+    const transportName = \`\${shortBase}\${extension}\`;
 
     return new File([file], transportName, {
         type: file.type || 'application/octet-stream',
