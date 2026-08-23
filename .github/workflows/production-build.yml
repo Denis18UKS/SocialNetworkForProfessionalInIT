@@ -52,6 +52,7 @@ jobs:
           node deploy/apply-mobile-ui-media-fixes.mjs
           node deploy/apply-single-camera-tile-fix.mjs
           node deploy/apply-chat-media-mobile-fix.mjs
+          node deploy/apply-chat-media-backend-fix.mjs
           node deploy/apply-native-android-integration.mjs
           node deploy/apply-native-fcm-push.mjs
           node deploy/apply-seo-fixes.mjs
@@ -76,6 +77,7 @@ jobs:
           node --check deploy/apply-mobile-ui-media-fixes.mjs
           node --check deploy/apply-single-camera-tile-fix.mjs
           node --check deploy/apply-chat-media-mobile-fix.mjs
+          node --check deploy/apply-chat-media-backend-fix.mjs
           node --check deploy/apply-native-android-integration.mjs
           node --check deploy/apply-native-fcm-push.mjs
           node --check deploy/apply-native-fcm-android.mjs
@@ -121,6 +123,7 @@ jobs:
           node deploy/apply-mobile-ui-media-fixes.mjs
           node deploy/apply-single-camera-tile-fix.mjs
           node deploy/apply-chat-media-mobile-fix.mjs
+          node deploy/apply-chat-media-backend-fix.mjs
           node deploy/apply-native-android-integration.mjs
           node deploy/apply-native-fcm-push.mjs
           node deploy/apply-seo-fixes.mjs
@@ -153,8 +156,9 @@ jobs:
           grep -q 'rel="canonical"' dist/index.html
           grep -q 'SocialBIRD — социальная сеть для IT-специалистов' dist/index.html
           grep -q 'sitemap.xml' dist/robots.txt
-          grep -q 'MAX_TRANSPORT_FILENAME_CHARS' src/pages/Chats.tsx
-          grep -q 'MAX_TRANSPORT_FILENAME_CHARS' src/pages/GroupChats.tsx
+          grep -q 'MAX_TRANSPORT_FILENAME_CHARS = 48' src/pages/Chats.tsx
+          grep -q 'MAX_TRANSPORT_FILENAME_CHARS = 48' src/pages/GroupChats.tsx
+          grep -q 'CHAT_MEDIA_BACKEND_FIX' backend/server.js
           grep -q 'NATIVE_FCM_PUSH' backend/server.js
 
       - name: Install backend dependencies
