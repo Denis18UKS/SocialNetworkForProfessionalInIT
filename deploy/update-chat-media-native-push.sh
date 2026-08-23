@@ -57,7 +57,8 @@ trap rollback ERR
 
 echo "[1/8] Fetching media and native push fixes"
 sudo -u "$APP_USER" git fetch origin +"$BRANCH:refs/remotes/origin/$BRANCH"
-sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- backend/native-fcm-push.js deploy/apply-chat-media-mobile-fix.mjs deploy/apply-chat-media-backend-fix.mjs deploy/apply-native-android-integration.mjs deploy/apply-native-fcm-push.mjs deploy/harden-source.mjs deploy/enable-sandbox-compiler.mjs
+sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- backend/native-fcm-push.js deploy/apply-chat-media-mobile-fix.mjs deploy/apply-chat-media-backend-fix.mjs deploy/apply-native-android-integration.mjs deploy/apply-native-fcm-push.mjs deploy/harden-source.mjs deploy/enable-sandbox-compiler.mjs deploy/configure-fcm-server.sh
+chmod 700 deploy/configure-fcm-server.sh
 
 echo "[2/8] Fixing long filenames, video layout and media upload backend"
 node --check deploy/apply-chat-media-mobile-fix.mjs
