@@ -16,6 +16,7 @@ const patch = (relativePath, transform) => {
   }
 };
 
+// CHAT_MEDIA_MOBILE_FIX_V2
 // 48 Unicode code points is intentionally conservative: even a 4-byte UTF-8 name,
 // plus an extension and the backend timestamp prefix, stays below common 255-byte
 // filesystem filename limits. The selected File itself is not mutated in UI; only
@@ -35,13 +36,18 @@ const makeTransportFile = (file: File) => {
     const reserved = extension ? Array.from(extension).length : 0;
     const safeBaseLength = Math.max(16, MAX_TRANSPORT_FILENAME_CHARS - reserved);
     const shortBase = Array.from(base).slice(0, safeBaseLength).join('').trim() || 'file';
-    const transportName = \`\${shortBase}\${extension}\`;
+    const transportName = \`${shortBase}\${extension}\`;
 
     return new File([file], transportName, {
         type: file.type || 'application/octet-stream',
         lastModified: file.lastModified,
     });
 };`;
+
+const patchVideo = (source) => source.replaceAll(
+  '<video controls className="max-w-full rounded">',
+  '<video controls preload="metadata" playsInline className="block aspect-video max-h-[60vh] w-full min-w-0 max-w-full rounded bg-black object-contain">',
+);
 
 patch('src/pages/Chats.tsx', (input) => {
   let source = input.replace('const MAX_TRANSPORT_FILENAME_CHARS = 120;', 'const MAX_TRANSPORT_FILENAME_CHARS = 48;');
@@ -87,10 +93,7 @@ patch('src/pages/Chats.tsx', (input) => {
     'className="bg-[#6E59A5] hover:bg-[#5a4a8a] h-10 w-10 p-0 rounded-full"',
     'className="h-10 w-10 shrink-0 rounded-full bg-[#6E59A5] p-0 hover:bg-[#5a4a8a]"',
   );
-  source = source.replace(
-    '<div className="mt-2">\n                                                                <video controls className="max-w-full rounded">',
-    '<div className="mt-2 min-w-0 max-w-full overflow-hidden">\n                                                                <video controls preload="metadata" playsInline className="block aspect-video max-h-[60vh] w-full min-w-0 max-w-full rounded bg-black object-contain">',
-  );
+  source = patchVideo(source);
 
   return source;
 });
@@ -147,10 +150,7 @@ patch('src/pages/GroupChats.tsx', (input) => {
     'className="text-xs text-gray-500 dark:text-gray-400 ml-2"',
     'className="ml-1 shrink-0 text-xs text-gray-500 dark:text-gray-400 sm:ml-2"',
   );
-  source = source.replace(
-    '<div className="mt-2">\n                                                                        <video controls className="max-w-full rounded">',
-    '<div className="mt-2 min-w-0 max-w-full overflow-hidden">\n                                                                        <video controls preload="metadata" playsInline className="block aspect-video max-h-[60vh] w-full min-w-0 max-w-full rounded bg-black object-contain">',
-  );
+  source = patchVideo(source);
   source = source.replace(
     'className="mobile-bottom-safe shrink-0 border-t border-gray-200 bg-white px-2 pb-2 pt-2 dark:border-gray-700 dark:bg-gray-800 sm:p-4"',
     'className="mobile-bottom-safe w-full min-w-0 max-w-full shrink-0 overflow-hidden border-t border-gray-200 bg-white px-2 pb-2 pt-2 dark:border-gray-700 dark:bg-gray-800 sm:p-4"',
@@ -187,4 +187,16 @@ patch('src/pages/GroupChats.tsx', (input) => {
   return source;
 });
 
-console.log('Chat media/mobile upload fix is current.');
+for (const relativePath of ['src/pages/Chats.tsx', 'src/pages/GroupChats.tsx']) {
+  const current = fs.readFileSync(path.join(root, relativePath), 'utf8');
+  const required = [
+    'MAX_TRANSPORT_FILENAME_CHARS = 48',
+    "formData.append('media', transportFile, transportFile.name)",
+    'playsInline',
+  ];
+  for (const marker of required) {
+    if (!current.includes(marker)) throw new Error(`Chat media v2 verification failed: ${relativePath} missing ${marker}`);
+  }
+}
+
+console.log('Chat media/mobile upload fix v2 is current.');
