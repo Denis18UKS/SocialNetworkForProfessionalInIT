@@ -39,8 +39,12 @@ fi
 
 cd "$APP_DIR"
 
-echo "[1/10] Creating Firebase project: $PROJECT_ID"
-firebase projects:create "$PROJECT_ID" --display-name "$DISPLAY_NAME"
+echo "[1/10] Preparing Firebase project: $PROJECT_ID"
+if gcloud projects describe "$PROJECT_ID" >/dev/null 2>&1; then
+  echo "Google Cloud project already exists; resuming: $PROJECT_ID"
+else
+  gcloud projects create "$PROJECT_ID" --name="$DISPLAY_NAME"
+fi
 
 for attempt in {1..30}; do
   if gcloud projects describe "$PROJECT_ID" >/dev/null 2>&1; then break; fi
@@ -53,8 +57,45 @@ done
 
 gcloud config set project "$PROJECT_ID" >/dev/null
 
+ACCESS_TOKEN="$(gcloud auth print-access-token)"
+FIREBASE_HTTP_STATUS="$(curl -sS -o /tmp/socialbird-firebase-project.json -w '%{http_code}' -H "Authorization: Bearer $ACCESS_TOKEN" "https://firebase.googleapis.com/v1beta1/projects/$PROJECT_ID")"
+if [[ "$FIREBASE_HTTP_STATUS" == "200" ]]; then
+  echo "Firebase resources are already enabled for $PROJECT_ID"
+else
+  echo "Adding Firebase resources to existing Google Cloud project"
+  if ! firebase projects:addfirebase "$PROJECT_ID"; then
+    echo >&2
+    echo "Failed to add Firebase resources to $PROJECT_ID." >&2
+    echo "The Google Cloud project itself already exists and will be reused; do NOT create another project." >&2
+    echo "If firebase-debug.log mentions Terms of Service / TOS / 403, open Firebase Console once with the same Google account and accept the Firebase Terms, then rerun:" >&2
+    echo "  bash deploy/setup-firebase-vps.sh $PROJECT_ID" >&2
+    echo "Debug tail:" >&2
+    tail -n 80 firebase-debug.log 2>/dev/null >&2 || true
+    exit 11
+  fi
+fi
+rm -f /tmp/socialbird-firebase-project.json
+
+for attempt in {1..30}; do
+  ACCESS_TOKEN="$(gcloud auth print-access-token)"
+  FIREBASE_HTTP_STATUS="$(curl -sS -o /tmp/socialbird-firebase-project.json -w '%{http_code}' -H "Authorization: Bearer $ACCESS_TOKEN" "https://firebase.googleapis.com/v1beta1/projects/$PROJECT_ID")"
+  if [[ "$FIREBASE_HTTP_STATUS" == "200" ]]; then break; fi
+  if [[ "$attempt" -eq 30 ]]; then
+    echo "Firebase resources did not become ready for $PROJECT_ID." >&2
+    cat /tmp/socialbird-firebase-project.json >&2 || true
+    rm -f /tmp/socialbird-firebase-project.json
+    exit 12
+  fi
+  sleep 2
+done
+rm -f /tmp/socialbird-firebase-project.json
+
 echo "[2/10] Registering SocialBIRD Android app"
-firebase apps:create -a "$PACKAGE_NAME" android "$DISPLAY_NAME" --project "$PROJECT_ID"
+if firebase apps:list android --project "$PROJECT_ID" --json 2>/dev/null | jq -e --arg pkg "$PACKAGE_NAME" '.result[]? | select(.packageName == $pkg)' >/dev/null 2>&1; then
+  echo "Android app already registered: $PACKAGE_NAME"
+else
+  firebase apps:create -a "$PACKAGE_NAME" android "$DISPLAY_NAME" --project "$PROJECT_ID"
+fi
 rm -f "$SDK_CONFIG"
 firebase apps:sdkconfig android -o "$SDK_CONFIG" --project "$PROJECT_ID"
 test -s "$SDK_CONFIG"
@@ -100,7 +141,6 @@ if ! grep -Fq '"configured":true' <<<"$STATUS"; then
 fi
 echo "$STATUS"
 
-# The backend script copied the key into /etc/socialbird with restricted permissions.
 shred -u "$SERVICE_KEY"
 
 echo "[6/10] Writing Firebase Android values to GitHub Actions variables"
