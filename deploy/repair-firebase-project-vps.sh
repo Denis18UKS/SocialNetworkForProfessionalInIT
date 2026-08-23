@@ -26,52 +26,93 @@ echo "Project: $PROJECT_ID"
 gcloud projects describe "$PROJECT_ID" >/dev/null
 gcloud config set project "$PROJECT_ID" >/dev/null
 
-echo "[1/5] Enabling prerequisite APIs"
+echo "[1/6] Enabling prerequisite APIs"
 gcloud services enable serviceusage.googleapis.com cloudresourcemanager.googleapis.com firebase.googleapis.com --project "$PROJECT_ID"
 
-echo "[2/5] Checking current Firebase state"
+echo "[2/6] Verifying the exact required IAM permissions"
 TOKEN="$(gcloud auth print-access-token)"
-HTTP="$(curl -sS -o /tmp/socialbird-firebase-get.json -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "https://firebase.googleapis.com/v1beta1/projects/$PROJECT_ID")"
+PERM_HTTP="$(curl -sS -o /tmp/socialbird-firebase-permissions.json -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "x-goog-user-project: $PROJECT_ID" \
+  -H 'Content-Type: application/json' \
+  --data-binary '{"permissions":["firebase.projects.update","resourcemanager.projects.get","serviceusage.services.enable","serviceusage.services.get"]}' \
+  "https://cloudresourcemanager.googleapis.com/v1/projects/$PROJECT_ID:testIamPermissions")"
+echo "IAM test HTTP: $PERM_HTTP"
+if [[ "$PERM_HTTP" == "200" ]]; then
+  jq . /tmp/socialbird-firebase-permissions.json
+else
+  echo "IAM permission test failed:" >&2
+  cat /tmp/socialbird-firebase-permissions.json >&2 || true
+fi
+
+echo "[3/6] Checking Firebase state with an explicit quota project"
+TOKEN="$(gcloud auth print-access-token)"
+HTTP="$(curl -sS -D /tmp/socialbird-firebase-get.headers -o /tmp/socialbird-firebase-get.json -w '%{http_code}' \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "x-goog-user-project: $PROJECT_ID" \
+  "https://firebase.googleapis.com/v1beta1/projects/$PROJECT_ID")"
+echo "Firebase GET HTTP: $HTTP"
 if [[ "$HTTP" == "200" ]]; then
-  echo "Firebase is already enabled for $PROJECT_ID"
-  rm -f /tmp/socialbird-firebase-get.json
+  jq . /tmp/socialbird-firebase-get.json
+  rm -f /tmp/socialbird-firebase-get.json /tmp/socialbird-firebase-get.headers /tmp/socialbird-firebase-permissions.json
+  echo "[4/6] Firebase is already enabled"
+  echo "[5/6] No repair needed"
+  echo "[6/6] Completed"
   echo "Run next: bash deploy/setup-firebase-vps.sh $PROJECT_ID"
   exit 0
 fi
 
-echo "Firebase GET returned HTTP $HTTP; trying Management REST addFirebase."
+echo "Firebase GET response body:"
+if [[ -s /tmp/socialbird-firebase-get.json ]]; then
+  jq . /tmp/socialbird-firebase-get.json 2>/dev/null || cat /tmp/socialbird-firebase-get.json
+else
+  echo "(empty body)"
+fi
 
-echo "[3/5] Calling projects.addFirebase directly"
+echo "[4/6] Calling projects.addFirebase with the target project as quota project"
 TOKEN="$(gcloud auth print-access-token)"
-ADD_HTTP="$(curl -sS -o /tmp/socialbird-addfirebase.json -w '%{http_code}' -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{}' "https://firebase.googleapis.com/v1beta1/projects/$PROJECT_ID:addFirebase")"
+ADD_HTTP="$(curl -sS -D /tmp/socialbird-addfirebase.headers -o /tmp/socialbird-addfirebase.json -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "x-goog-user-project: $PROJECT_ID" \
+  "https://firebase.googleapis.com/v1beta1/projects/$PROJECT_ID:addFirebase")"
 echo "addFirebase HTTP: $ADD_HTTP"
 
 if [[ "$ADD_HTTP" != "200" && "$ADD_HTTP" != "201" && "$ADD_HTTP" != "202" ]]; then
   echo "Firebase Management API response:" >&2
-  jq . /tmp/socialbird-addfirebase.json 2>/dev/null >&2 || cat /tmp/socialbird-addfirebase.json >&2 || true
+  if [[ -s /tmp/socialbird-addfirebase.json ]]; then
+    jq . /tmp/socialbird-addfirebase.json 2>/dev/null >&2 || cat /tmp/socialbird-addfirebase.json >&2
+  else
+    echo "(empty body)" >&2
+    echo "Response headers:" >&2
+    cat /tmp/socialbird-addfirebase.headers >&2 || true
+  fi
   echo >&2
-  echo "[4/5] Project IAM roles for active account" >&2
+  echo "Project IAM roles for active account:" >&2
   gcloud projects get-iam-policy "$PROJECT_ID" --flatten='bindings[].members' --filter="bindings.members:user:$ACCOUNT" --format='table(bindings.role)' >&2 || true
   echo >&2
-  if [[ "$ADD_HTTP" == "403" ]]; then
-    echo "HTTP 403 means either the active account lacks the required Firebase/service-usage permissions, or Firebase Terms of Service have not been accepted." >&2
-    echo "Firebase Terms cannot be accepted with CLI/REST; Google requires the Firebase Console for that one consent step." >&2
-  fi
-  rm -f /tmp/socialbird-firebase-get.json
+  echo "The request now includes x-goog-user-project, so quota/billing attribution is no longer ambiguous." >&2
+  echo "If the IAM test above includes all four required permissions and this call still returns 403, the remaining likely causes are Firebase account Terms/eligibility or an organization-level deny/policy." >&2
+  rm -f /tmp/socialbird-firebase-get.json /tmp/socialbird-firebase-get.headers /tmp/socialbird-firebase-permissions.json
   exit 10
 fi
 
-cat /tmp/socialbird-addfirebase.json | jq . 2>/dev/null || true
+if [[ -s /tmp/socialbird-addfirebase.json ]]; then
+  jq . /tmp/socialbird-addfirebase.json 2>/dev/null || cat /tmp/socialbird-addfirebase.json
+fi
 
-echo "[4/5] Waiting until Firebase project is ready"
+echo "[5/6] Waiting until Firebase project is ready"
 for attempt in {1..40}; do
   sleep 3
   TOKEN="$(gcloud auth print-access-token)"
-  HTTP="$(curl -sS -o /tmp/socialbird-firebase-get.json -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "https://firebase.googleapis.com/v1beta1/projects/$PROJECT_ID")"
+  HTTP="$(curl -sS -o /tmp/socialbird-firebase-get.json -w '%{http_code}' \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "x-goog-user-project: $PROJECT_ID" \
+    "https://firebase.googleapis.com/v1beta1/projects/$PROJECT_ID")"
   if [[ "$HTTP" == "200" ]]; then
     echo "Firebase is ready."
-    rm -f /tmp/socialbird-firebase-get.json /tmp/socialbird-addfirebase.json
-    echo "[5/5] Completed"
+    jq . /tmp/socialbird-firebase-get.json
+    rm -f /tmp/socialbird-firebase-get.json /tmp/socialbird-addfirebase.json /tmp/socialbird-firebase-get.headers /tmp/socialbird-addfirebase.headers /tmp/socialbird-firebase-permissions.json
+    echo "[6/6] Completed"
     echo "Run next: bash deploy/setup-firebase-vps.sh $PROJECT_ID"
     exit 0
   fi
