@@ -93,7 +93,8 @@ require_marker src/pages/GroupChats.tsx 'MAX_TRANSPORT_FILENAME_CHARS = 48' 'gro
 require_marker src/pages/Chats.tsx 'playsInline' 'private chat bounded inline video'
 require_marker src/pages/GroupChats.tsx 'playsInline' 'group chat bounded inline video'
 require_marker backend/server.js 'CHAT_MEDIA_BACKEND_FIX' 'group media backend mention fix'
-require_marker backend/server.js "group-chats/:chatId/upload', verifyToken, uploadChatMedia" 'group upload guarded middleware'
+require_marker backend/server.js 'const uploadChatMedia = (req, res, next) => {' 'guarded chat upload middleware declaration'
+require_marker backend/server.js "group-chats/:chatId/upload', verifyToken, uploadChatMedia" 'group upload guarded middleware route'
 
 echo "[3/8] Wiring the shared Android/web call architecture and FCM transport"
 node --check backend/native-fcm-push.js
@@ -110,6 +111,7 @@ sudo -u "$APP_USER" node deploy/enable-sandbox-compiler.mjs
 node --check backend/server.production.js
 require_marker backend/server.production.js 'NATIVE_FCM_PUSH: dispatch-targeted-notification' 'production FCM dispatcher'
 require_marker backend/server.production.js 'CHAT_MEDIA_BACKEND_FIX' 'production media backend fix'
+require_marker backend/server.production.js 'const uploadChatMedia = (req, res, next) => {' 'production guarded chat upload middleware declaration'
 
 echo "[5/8] Building frontend"
 sudo -u "$APP_USER" npm run build
@@ -125,11 +127,13 @@ echo "[6/8] Restarting only SocialBIRD API"
 )
 
 for attempt in {1..25}; do
-  if ss -lnt | grep -q '127.0.0.1:5000'; then break; fi
+  if curl -fsS http://127.0.0.1:5000/native-push/status >/dev/null 2>&1; then
+    break
+  fi
   if [[ "$attempt" -eq 25 ]]; then
-    echo "API did not return on port 5000." >&2
+    echo "API did not return a healthy native-push status endpoint." >&2
     tail -n 160 /var/log/socialbird/api-error.log 2>/dev/null || true
-    exit 1
+    false
   fi
   sleep 1
 done
