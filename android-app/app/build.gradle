@@ -4,6 +4,15 @@ plugins {
 
 def socialbirdVersionCode = (System.getenv('SOCIALBIRD_VERSION_CODE') ?: '1').toInteger()
 def socialbirdVersionName = System.getenv('SOCIALBIRD_VERSION_NAME') ?: '1.0.0'
+def quoteBuildConfig = { value ->
+    def normalized = (value ?: '').toString().replace('\\', '\\\\').replace('"', '\\"')
+    return '"' + normalized + '"'
+}
+
+def firebaseProjectId = System.getenv('SOCIALBIRD_FIREBASE_PROJECT_ID') ?: ''
+def firebaseAppId = System.getenv('SOCIALBIRD_FIREBASE_APP_ID') ?: ''
+def firebaseApiKey = System.getenv('SOCIALBIRD_FIREBASE_API_KEY') ?: ''
+def firebaseSenderId = System.getenv('SOCIALBIRD_FIREBASE_SENDER_ID') ?: ''
 
 android {
     namespace 'io.itbird.socialbird'
@@ -15,6 +24,17 @@ android {
         targetSdk 35
         versionCode socialbirdVersionCode
         versionName socialbirdVersionName
+
+        // Public Firebase Android identifiers are injected at build time. The app
+        // still builds if they are empty; FCM simply stays disabled until configured.
+        buildConfigField 'String', 'FIREBASE_PROJECT_ID', quoteBuildConfig(firebaseProjectId)
+        buildConfigField 'String', 'FIREBASE_APP_ID', quoteBuildConfig(firebaseAppId)
+        buildConfigField 'String', 'FIREBASE_API_KEY', quoteBuildConfig(firebaseApiKey)
+        buildConfigField 'String', 'FIREBASE_SENDER_ID', quoteBuildConfig(firebaseSenderId)
+    }
+
+    buildFeatures {
+        buildConfig true
     }
 
     buildTypes {
@@ -31,7 +51,9 @@ android {
 }
 
 dependencies {
-    // Native background signalling/notifications. The website remains the single UI
-    // codebase; Android only owns OS-level capabilities that a WebView cannot provide.
+    // Shared website UI/WebRTC remains authoritative. Native Android owns only OS
+    // integrations (FCM, CallStyle notifications, MediaProjection, files, PiP).
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    implementation platform('com.google.firebase:firebase-bom:33.16.0')
+    implementation 'com.google.firebase:firebase-messaging'
 }
