@@ -25,24 +25,14 @@ backup_file() {
   return 0
 }
 
-for file in \
-  src/pages/Chats.tsx \
-  src/pages/GroupChats.tsx \
-  backend/server.js \
-  backend/server.production.js \
-  backend/native-fcm-push.js; do
+for file in src/pages/Chats.tsx src/pages/GroupChats.tsx backend/server.js backend/server.production.js backend/native-fcm-push.js; do
   backup_file "$file"
 done
 [[ -d dist ]] && cp -a dist "$BACKUP_DIR/dist"
 
 rollback() {
   echo "Media/native push update failed; restoring previous live version..." >&2
-  for file in \
-    src/pages/Chats.tsx \
-    src/pages/GroupChats.tsx \
-    backend/server.js \
-    backend/server.production.js \
-    backend/native-fcm-push.js; do
+  for file in src/pages/Chats.tsx src/pages/GroupChats.tsx backend/server.js backend/server.production.js backend/native-fcm-push.js; do
     if [[ -e "$BACKUP_DIR/$file" ]]; then
       mkdir -p "$(dirname "$file")"
       cp -a "$BACKUP_DIR/$file" "$file"
@@ -67,21 +57,19 @@ trap rollback ERR
 
 echo "[1/8] Fetching media and native push fixes"
 sudo -u "$APP_USER" git fetch origin +"$BRANCH:refs/remotes/origin/$BRANCH"
-sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
-  backend/native-fcm-push.js \
-  deploy/apply-chat-media-mobile-fix.mjs \
-  deploy/apply-native-android-integration.mjs \
-  deploy/apply-native-fcm-push.mjs \
-  deploy/harden-source.mjs \
-  deploy/enable-sandbox-compiler.mjs
+sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- backend/native-fcm-push.js deploy/apply-chat-media-mobile-fix.mjs deploy/apply-chat-media-backend-fix.mjs deploy/apply-native-android-integration.mjs deploy/apply-native-fcm-push.mjs deploy/harden-source.mjs deploy/enable-sandbox-compiler.mjs
 
-echo "[2/8] Fixing long media filenames and mobile video layout"
+echo "[2/8] Fixing long filenames, video layout and media upload backend"
 node --check deploy/apply-chat-media-mobile-fix.mjs
+node --check deploy/apply-chat-media-backend-fix.mjs
 sudo -u "$APP_USER" node deploy/apply-chat-media-mobile-fix.mjs
-grep -q 'MAX_TRANSPORT_FILENAME_CHARS' src/pages/Chats.tsx
-grep -q 'MAX_TRANSPORT_FILENAME_CHARS' src/pages/GroupChats.tsx
+sudo -u "$APP_USER" node deploy/apply-chat-media-backend-fix.mjs
+grep -q 'MAX_TRANSPORT_FILENAME_CHARS = 48' src/pages/Chats.tsx
+grep -q 'MAX_TRANSPORT_FILENAME_CHARS = 48' src/pages/GroupChats.tsx
 grep -q 'playsInline' src/pages/Chats.tsx
 grep -q 'playsInline' src/pages/GroupChats.tsx
+grep -q 'CHAT_MEDIA_BACKEND_FIX' backend/server.js
+grep -q "group-chats/:chatId/upload', verifyToken, uploadChatMedia" backend/server.js
 
 echo "[3/8] Wiring the shared Android/web call architecture and FCM transport"
 node --check backend/native-fcm-push.js
@@ -97,6 +85,7 @@ sudo -u "$APP_USER" node deploy/harden-source.mjs
 sudo -u "$APP_USER" node deploy/enable-sandbox-compiler.mjs
 node --check backend/server.production.js
 grep -q 'NATIVE_FCM_PUSH: dispatch-targeted-notification' backend/server.production.js
+grep -q 'CHAT_MEDIA_BACKEND_FIX' backend/server.production.js
 
 echo "[5/8] Building frontend"
 sudo -u "$APP_USER" npm run build
@@ -140,4 +129,5 @@ echo
 echo "Chat media + native Android push backend update completed."
 echo "Backup: $BACKUP_DIR"
 echo "Long filenames are shortened only for multipart transport; mobile UI remains bounded to the viewport."
+echo "Group media upload no longer references an undefined mention list."
 echo "Native FCM routes are installed. Use deploy/configure-fcm-server.sh after creating the Firebase service account."
