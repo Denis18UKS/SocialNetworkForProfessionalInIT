@@ -33,4 +33,33 @@ if (!source.includes('NATIVE_FCM_PUSH: register-routes')) {
 }
 
 fs.writeFileSync(serverPath, source, 'utf8');
+
+const installPath = path.join(root, 'deploy/install.sh');
+if (fs.existsSync(installPath)) {
+  let install = fs.readFileSync(installPath, 'utf8');
+
+  if (!install.includes('FCM_SERVICE_ACCOUNT_FILE=')) {
+    const marker = 'WS_HEARTBEAT_MS=30000\n';
+    if (install.includes(marker)) {
+      install = install.replace(marker, `${marker}FCM_SERVICE_ACCOUNT_FILE=/etc/socialbird/firebase-service-account.json\n`);
+    } else {
+      throw new Error('Native FCM patch failed: installer backend env marker');
+    }
+  }
+
+  const hardenCall = 'sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/harden-source.mjs"';
+  const installCalls = [
+    'sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/apply-chat-media-mobile-fix.mjs"',
+    'sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/apply-native-android-integration.mjs"',
+    'sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/apply-native-fcm-push.mjs"',
+  ];
+  if (!installCalls.every((call) => install.includes(call))) {
+    if (!install.includes(hardenCall)) throw new Error('Native FCM patch failed: installer harden marker');
+    const missing = installCalls.filter((call) => !install.includes(call));
+    install = install.replace(hardenCall, `${missing.join('\n')}\n${hardenCall}`);
+  }
+
+  fs.writeFileSync(installPath, install, 'utf8');
+}
+
 console.log('Native Android FCM push backend wiring is current.');
