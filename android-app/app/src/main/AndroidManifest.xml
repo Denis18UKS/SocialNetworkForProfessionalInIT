@@ -19,6 +19,7 @@
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
     <application
+        android:name=".SocialBirdApplication"
         android:allowBackup="false"
         android:icon="@drawable/ic_launcher"
         android:roundIcon="@drawable/ic_launcher"
@@ -45,11 +46,18 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data
-                    android:scheme="https"
-                    android:host="socialbird.31.207.74.138.nip.io" />
+                <data android:scheme="https" android:host="socialbird.ru" />
+                <data android:scheme="https" android:host="socialbird.31.207.74.138.nip.io" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".SocialBirdFirebaseMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
 
         <service
             android:name=".BackgroundMessagingService"
@@ -68,7 +76,7 @@
             android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action_MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
     </application>
