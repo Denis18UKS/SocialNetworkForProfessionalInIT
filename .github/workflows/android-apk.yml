@@ -8,6 +8,7 @@ on:
     paths:
       - "android-app/**"
       - "deploy/apply-android-runtime-fixes.mjs"
+      - "deploy/apply-native-fcm-android.mjs"
       - ".github/workflows/android-apk.yml"
 
 permissions:
@@ -31,13 +32,18 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Apply native Android runtime integration
+      - name: Apply native Android runtime and FCM integration
         run: |
           node --check deploy/apply-android-runtime-fixes.mjs
+          node --check deploy/apply-native-fcm-android.mjs
           node deploy/apply-android-runtime-fixes.mjs
+          node deploy/apply-native-fcm-android.mjs
           grep -q "NATIVE_ANDROID_RUNTIME: initialize-runtime" android-app/app/src/main/java/io/itbird/socialbird/MainActivity.java
           grep -q "NATIVE_ANDROID_RUNTIME: answer-intent" android-app/app/src/main/java/io/itbird/socialbird/MainActivity.java
           grep -q "NATIVE_ANDROID_RUNTIME: web-fullscreen" android-app/app/src/main/java/io/itbird/socialbird/MainActivity.java
+          grep -q "NATIVE_FCM_PUSH" android-app/app/src/main/java/io/itbird/socialbird/MainActivity.java
+          grep -q "SocialBirdFirebaseMessagingService" android-app/app/src/main/AndroidManifest.xml
+          grep -q "firebase-messaging" android-app/app/build.gradle
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -77,10 +83,27 @@ jobs:
               -validity 10000
           fi
 
+      - name: Report Firebase build configuration
+        env:
+          FIREBASE_PROJECT_ID: ${{ vars.SOCIALBIRD_FIREBASE_PROJECT_ID }}
+          FIREBASE_APP_ID: ${{ vars.SOCIALBIRD_FIREBASE_APP_ID }}
+          FIREBASE_API_KEY: ${{ vars.SOCIALBIRD_FIREBASE_API_KEY }}
+          FIREBASE_SENDER_ID: ${{ vars.SOCIALBIRD_FIREBASE_SENDER_ID }}
+        run: |
+          if [ -n "$FIREBASE_PROJECT_ID" ] && [ -n "$FIREBASE_APP_ID" ] && [ -n "$FIREBASE_API_KEY" ] && [ -n "$FIREBASE_SENDER_ID" ]; then
+            echo "Firebase Android push configuration is present."
+          else
+            echo "WARNING: Firebase Android variables are incomplete; APK will build but FCM will stay disabled until the four repository variables are configured."
+          fi
+
       - name: Build installable APK
         env:
           SOCIALBIRD_VERSION_CODE: ${{ github.run_number }}
-          SOCIALBIRD_VERSION_NAME: 1.1.${{ github.run_number }}
+          SOCIALBIRD_VERSION_NAME: 1.2.${{ github.run_number }}
+          SOCIALBIRD_FIREBASE_PROJECT_ID: ${{ vars.SOCIALBIRD_FIREBASE_PROJECT_ID }}
+          SOCIALBIRD_FIREBASE_APP_ID: ${{ vars.SOCIALBIRD_FIREBASE_APP_ID }}
+          SOCIALBIRD_FIREBASE_API_KEY: ${{ vars.SOCIALBIRD_FIREBASE_API_KEY }}
+          SOCIALBIRD_FIREBASE_SENDER_ID: ${{ vars.SOCIALBIRD_FIREBASE_SENDER_ID }}
         run: gradle -p android-app assembleDebug --no-daemon --stacktrace
 
       - name: Prepare stable APK name
@@ -104,6 +127,6 @@ jobs:
           else
             gh release create android-latest SocialBIRD-Android.apk \
               --title "SocialBIRD Android" \
-              --notes "Нативная Android-оболочка SocialBIRD: тот же production-интерфейс и аккаунт, системные входящие звонки/уведомления, PiP, MediaProjection, системный звук, камера/микрофон, загрузка и скачивание файлов." \
+              --notes "SocialBIRD Android: тот же production React/WebRTC, FCM push-звонки и уведомления, CallStyle/full-screen incoming call UI, PiP, MediaProjection, системный звук, камера/микрофон и файлы." \
               --prerelease
           fi
