@@ -16,8 +16,12 @@ const patch = (relativePath, transform) => {
   }
 };
 
+// 48 Unicode code points is intentionally conservative: even a 4-byte UTF-8 name,
+// plus an extension and the backend timestamp prefix, stays below common 255-byte
+// filesystem filename limits. The selected File itself is not mutated in UI; only
+// the multipart transport filename is shortened when necessary.
 const uploadHelpers = `const MAX_CHAT_UPLOAD_BYTES = 100 * 1024 * 1024;
-const MAX_TRANSPORT_FILENAME_CHARS = 120;
+const MAX_TRANSPORT_FILENAME_CHARS = 48;
 
 const makeTransportFile = (file: File) => {
     const originalName = String(file.name || 'file');
@@ -40,7 +44,7 @@ const makeTransportFile = (file: File) => {
 };`;
 
 patch('src/pages/Chats.tsx', (input) => {
-  let source = input;
+  let source = input.replace('const MAX_TRANSPORT_FILENAME_CHARS = 120;', 'const MAX_TRANSPORT_FILENAME_CHARS = 48;');
 
   if (!source.includes('MAX_TRANSPORT_FILENAME_CHARS')) {
     source = source.replace('const MAX_CHAT_UPLOAD_BYTES = 100 * 1024 * 1024;', uploadHelpers);
@@ -92,7 +96,7 @@ patch('src/pages/Chats.tsx', (input) => {
 });
 
 patch('src/pages/GroupChats.tsx', (input) => {
-  let source = input;
+  let source = input.replace('const MAX_TRANSPORT_FILENAME_CHARS = 120;', 'const MAX_TRANSPORT_FILENAME_CHARS = 48;');
 
   if (!source.includes('MAX_CHAT_UPLOAD_BYTES')) {
     source = source.replace('const GroupChats = () => {', `${uploadHelpers}\n\nconst GroupChats = () => {`);
@@ -104,12 +108,10 @@ patch('src/pages/GroupChats.tsx', (input) => {
   const newFileChange = `    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {\n        if (e.target.files && e.target.files.length > 0) {\n            const file = e.target.files[0];\n            if (file.size > MAX_CHAT_UPLOAD_BYTES) {\n                toast.error("Файл слишком большой. Максимальный размер — 100 МБ.");\n                e.target.value = "";\n                setMediaFile(null);\n                return;\n            }\n            setMediaFile(file);\n        }\n    };`;
   if (source.includes(oldFileChange)) source = source.replace(oldFileChange, newFileChange);
 
-  if (!source.includes('if (file.size > MAX_CHAT_UPLOAD_BYTES) {')) {
-    source = source.replace(
-      `    const sendMediaMessage = async (file: File, messageText = newMessage.trim()) => {\n        const token = localStorage.getItem("token");`,
-      `    const sendMediaMessage = async (file: File, messageText = newMessage.trim()) => {\n        if (file.size > MAX_CHAT_UPLOAD_BYTES) {\n            toast.error("Файл слишком большой. Максимальный размер — 100 МБ.");\n            return;\n        }\n        const token = localStorage.getItem("token");`,
-    );
-  }
+  source = source.replace(
+    `    const sendMediaMessage = async (file: File, messageText = newMessage.trim()) => {\n        const token = localStorage.getItem("token");`,
+    `    const sendMediaMessage = async (file: File, messageText = newMessage.trim()) => {\n        if (file.size > MAX_CHAT_UPLOAD_BYTES) {\n            toast.error("Файл слишком большой. Максимальный размер — 100 МБ.");\n            return;\n        }\n        const token = localStorage.getItem("token");`,
+  );
 
   source = source.replace(
     "            formData.append('media', file);",
