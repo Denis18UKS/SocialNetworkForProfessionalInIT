@@ -25,6 +25,19 @@ backup_file() {
   return 0
 }
 
+require_marker() {
+  local file="$1"
+  local marker="$2"
+  local label="$3"
+  if ! grep -Fq -- "$marker" "$file"; then
+    echo "Verification failed: $label" >&2
+    echo "File: $file" >&2
+    echo "Expected marker: $marker" >&2
+    return 1
+  fi
+  echo "  OK: $label"
+}
+
 for file in src/pages/Chats.tsx src/pages/GroupChats.tsx backend/server.js backend/server.production.js backend/native-fcm-push.js; do
   backup_file "$file"
 done
@@ -65,12 +78,12 @@ node --check deploy/apply-chat-media-mobile-fix.mjs
 node --check deploy/apply-chat-media-backend-fix.mjs
 sudo -u "$APP_USER" node deploy/apply-chat-media-mobile-fix.mjs
 sudo -u "$APP_USER" node deploy/apply-chat-media-backend-fix.mjs
-grep -q 'MAX_TRANSPORT_FILENAME_CHARS = 48' src/pages/Chats.tsx
-grep -q 'MAX_TRANSPORT_FILENAME_CHARS = 48' src/pages/GroupChats.tsx
-grep -q 'playsInline' src/pages/Chats.tsx
-grep -q 'playsInline' src/pages/GroupChats.tsx
-grep -q 'CHAT_MEDIA_BACKEND_FIX' backend/server.js
-grep -q "group-chats/:chatId/upload', verifyToken, uploadChatMedia" backend/server.js
+require_marker src/pages/Chats.tsx 'MAX_TRANSPORT_FILENAME_CHARS = 48' 'private chat long filename transport'
+require_marker src/pages/GroupChats.tsx 'MAX_TRANSPORT_FILENAME_CHARS = 48' 'group chat long filename transport'
+require_marker src/pages/Chats.tsx 'playsInline' 'private chat bounded inline video'
+require_marker src/pages/GroupChats.tsx 'playsInline' 'group chat bounded inline video'
+require_marker backend/server.js 'CHAT_MEDIA_BACKEND_FIX' 'group media backend mention fix'
+require_marker backend/server.js "group-chats/:chatId/upload', verifyToken, uploadChatMedia" 'group upload guarded middleware'
 
 echo "[3/8] Wiring the shared Android/web call architecture and FCM transport"
 node --check backend/native-fcm-push.js
@@ -78,15 +91,15 @@ node --check deploy/apply-native-android-integration.mjs
 node --check deploy/apply-native-fcm-push.mjs
 sudo -u "$APP_USER" node deploy/apply-native-android-integration.mjs
 sudo -u "$APP_USER" node deploy/apply-native-fcm-push.mjs
-grep -q 'NATIVE_FCM_PUSH: dispatch-targeted-notification' backend/server.js
-grep -q '/native-push/register' backend/native-fcm-push.js
+require_marker backend/server.js 'NATIVE_FCM_PUSH: dispatch-targeted-notification' 'native FCM notification dispatcher'
+require_marker backend/native-fcm-push.js '/native-push/register' 'native FCM device registration route'
 
 echo "[4/8] Rebuilding hardened SocialBIRD API"
 sudo -u "$APP_USER" node deploy/harden-source.mjs
 sudo -u "$APP_USER" node deploy/enable-sandbox-compiler.mjs
 node --check backend/server.production.js
-grep -q 'NATIVE_FCM_PUSH: dispatch-targeted-notification' backend/server.production.js
-grep -q 'CHAT_MEDIA_BACKEND_FIX' backend/server.production.js
+require_marker backend/server.production.js 'NATIVE_FCM_PUSH: dispatch-targeted-notification' 'production FCM dispatcher'
+require_marker backend/server.production.js 'CHAT_MEDIA_BACKEND_FIX' 'production media backend fix'
 
 echo "[5/8] Building frontend"
 sudo -u "$APP_USER" npm run build
@@ -115,7 +128,7 @@ echo "[7/8] Verifying native push endpoint"
 STATUS_FILE="$(mktemp)"
 trap 'rm -f "$STATUS_FILE"; rollback' ERR
 curl -fsS http://127.0.0.1:5000/native-push/status -o "$STATUS_FILE"
-grep -q 'fcm-http-v1' "$STATUS_FILE"
+require_marker "$STATUS_FILE" 'fcm-http-v1' 'native push HTTP v1 status endpoint'
 cat "$STATUS_FILE"
 rm -f "$STATUS_FILE"
 
@@ -131,4 +144,4 @@ echo "Chat media + native Android push backend update completed."
 echo "Backup: $BACKUP_DIR"
 echo "Long filenames are shortened only for multipart transport; mobile UI remains bounded to the viewport."
 echo "Group media upload no longer references an undefined mention list."
-echo "Native FCM routes are installed. Use deploy/configure-fcm-server.sh after creating the Firebase service account."
+echo "Native FCM routes are installed. Use deploy/configure-fcm-server.sh only after the Firebase service-account JSON actually exists on this VPS."
