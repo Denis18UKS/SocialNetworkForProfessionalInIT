@@ -32,6 +32,14 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Validate JavaScript syntax
+        run: |
+          node --check main.cjs
+          node --check preload.cjs
+          node --check renderer/app.js
+          node --check renderer/launcher.js
+          node --check renderer/cinema.js
+
       - name: Install dependencies
         run: npm install
 
