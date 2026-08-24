@@ -39,14 +39,23 @@ type NavItem = {
 };
 
 type NativeVersionBridge = {
+  getVersion?: () => string;
   getVersionCode?: () => number;
+};
+
+const versionNameFallbackCode = (versionName: string) => {
+  const parts = String(versionName || "").split(".");
+  const last = Number(parts.at(-1) || 0);
+  return Number.isInteger(last) && last > 0 ? last : 0;
 };
 
 const getInstalledAndroidVersionCode = () => {
   if (!isNativeAndroidApp()) return 0;
   try {
     const bridge = (window as typeof window & { ITBirdAndroid?: NativeVersionBridge }).ITBirdAndroid;
-    return Number(bridge?.getVersionCode?.() || 0);
+    const nativeCode = Number(bridge?.getVersionCode?.() || 0);
+    if (Number.isInteger(nativeCode) && nativeCode > 0) return nativeCode;
+    return versionNameFallbackCode(String(bridge?.getVersion?.() || ""));
   } catch {
     return 0;
   }
