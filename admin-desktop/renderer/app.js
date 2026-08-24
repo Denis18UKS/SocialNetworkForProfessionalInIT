@@ -9,6 +9,7 @@ const state = {
   view: 'overview',
   stats: null,
   users: [],
+  posts: [],
   audit: [],
   query: '',
   busy: false,
@@ -22,23 +23,6 @@ const esc = (value) => String(value ?? '')
   .replaceAll('>', '&gt;')
   .replaceAll('"', '&quot;')
   .replaceAll("'", '&#039;');
-
-const setError = (error) => {
-  state.error = error?.message || String(error || 'Неизвестная ошибка');
-  state.notice = '';
-  render();
-};
-
-const setNotice = (message) => {
-  state.notice = String(message || '');
-  state.error = '';
-  render();
-};
-
-const setBusy = (busy) => {
-  state.busy = busy;
-  render();
-};
 
 const messageBlock = () => `${state.error ? `<div class="error">${esc(state.error)}</div>` : ''}${state.notice ? `<div class="success">${esc(state.notice)}</div>` : ''}`;
 const spinner = () => state.busy ? '<span class="spinner"></span>' : '';
@@ -135,9 +119,15 @@ async function onConfirmCode(event) {
 }
 
 async function loadAll() {
-  const [stats, users, audit] = await Promise.all([api.getStats(), api.getUsers(state.query), api.getAudit()]);
+  const [stats, users, posts, audit] = await Promise.all([
+    api.getStats(),
+    api.getUsers(state.query),
+    api.getPosts(),
+    api.getAudit(),
+  ]);
   state.stats = stats;
   state.users = users.users || [];
+  state.posts = Array.isArray(posts) ? posts : [];
   state.audit = audit.audit || [];
 }
 
@@ -148,6 +138,7 @@ async function refreshCurrent() {
   try {
     if (state.view === 'overview') state.stats = await api.getStats();
     if (state.view === 'users') state.users = (await api.getUsers(state.query)).users || [];
+    if (state.view === 'moderation') state.posts = await api.getPosts();
     if (state.view === 'audit') state.audit = (await api.getAudit()).audit || [];
   } catch (error) {
     state.error = error.message || String(error);
@@ -164,8 +155,9 @@ function renderOverview() {
     ['Онлайн сейчас', stats.onlineUsers ?? '—'],
     ['Заблокированы', stats.blocked ?? '—'],
     ['Ожидают подтверждения', stats.pendingRegistrations ?? '—'],
-    ['Администраторы', stats.admins ?? '—'],
+    ['Посты на модерации', stats.pendingPosts ?? '—'],
     ['FCM-токены', stats.nativePushTokens ?? '—'],
+    ['Администраторы', stats.admins ?? '—'],
   ];
   return `
     <div class="grid stats">${cards.map(([label, value]) => `<div class="stat"><span class="muted">${esc(label)}</span><strong>${esc(value)}</strong></div>`).join('')}</div>
@@ -189,7 +181,7 @@ function renderUsers() {
       <td>${esc(user.email)}</td>
       <td>${esc(user.github_username || '—')}</td>
       <td><select class="role-select" data-id="${esc(user.id)}"><option value="user" ${String(user.role || 'user') === 'user' ? 'selected' : ''}>user</option><option value="admin" ${user.role === 'admin' ? 'selected' : ''}>admin</option></select></td>
-      <td><span class="badge ${blocked ? 'warn' : 'good'}">${blocked ? 'Заблокирован' : 'Активен'}</span></td>
+      <td><span class="badge ${blocked ? 'warn' : 'good'}">${blocked ? 'Заблокирован' : 'Активен'}</span>${blocked && user.reason_blocked ? `<div class="subtle">${esc(user.reason_blocked)}</div>` : ''}</td>
       <td><div class="actions"><button class="${blocked ? 'secondary' : 'danger'} small block-btn" data-id="${esc(user.id)}" data-blocked="${blocked ? '0' : '1'}">${blocked ? 'Разблокировать' : 'Заблокировать'}</button></div></td>
     </tr>`;
   }).join('');
@@ -200,13 +192,43 @@ function renderUsers() {
     </div>`;
 }
 
+function renderModeration() {
+  const rows = state.posts.map((post) => `<tr>
+    <td>${esc(post.id)}</td>
+    <td><strong>${esc(post.title || 'Без заголовка')}</strong><div class="subtle">${esc(String(post.description || '').slice(0, 180))}</div></td>
+    <td>${esc(post.user || post.username || post.author_id || '—')}</td>
+    <td><span class="badge ${post.status === 'принят' ? 'good' : post.status === 'отклонен' ? 'warn' : ''}">${esc(post.status || 'ожидание')}</span></td>
+    <td>${post.created_at ? esc(new Date(post.created_at).toLocaleString('ru-RU')) : '—'}</td>
+    <td><div class="actions">
+      <button class="secondary small post-status-btn" data-id="${esc(post.id)}" data-status="принят">Принять</button>
+      <button class="secondary small post-status-btn" data-id="${esc(post.id)}" data-status="отклонен">Отклонить</button>
+      <button class="danger small post-delete-btn" data-id="${esc(post.id)}">Удалить</button>
+    </div></td>
+  </tr>`).join('');
+  return `<div class="panel"><div class="table-wrap"><table class="table"><thead><tr><th>ID</th><th>Публикация</th><th>Автор</th><th>Статус</th><th>Дата</th><th>Действия</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty">Нет публикаций для отображения</td></tr>'}</tbody></table></div></div>`;
+}
+
 function renderAudit() {
   const items = state.audit.map((entry) => `<div class="audit-item"><div>${esc(new Date(entry.created_at).toLocaleString('ru-RU'))}</div><div>${esc(entry.admin_username || entry.admin_id)}</div><div><strong>${esc(entry.action_name)}</strong>${entry.target_id ? ` · ${esc(entry.target_type || '')} #${esc(entry.target_id)}` : ''}</div></div>`).join('');
   return `<div class="panel"><h3>Журнал действий администраторов</h3><div class="audit">${items || '<div class="empty">Журнал пока пуст</div>'}</div></div>`;
 }
 
 function renderDashboard() {
-  const content = state.view === 'users' ? renderUsers() : state.view === 'audit' ? renderAudit() : renderOverview();
+  const content = state.view === 'users'
+    ? renderUsers()
+    : state.view === 'moderation'
+      ? renderModeration()
+      : state.view === 'audit'
+        ? renderAudit()
+        : renderOverview();
+  const title = state.view === 'users'
+    ? 'Пользователи'
+    : state.view === 'moderation'
+      ? 'Модерация публикаций'
+      : state.view === 'audit'
+        ? 'Аудит'
+        : 'Состояние SocialBIRD';
+
   root.innerHTML = `
     <div class="shell">
       <aside class="sidebar">
@@ -214,12 +236,13 @@ function renderDashboard() {
         <div class="nav">
           <button data-view="overview" class="${state.view === 'overview' ? 'active' : ''}">Обзор</button>
           <button data-view="users" class="${state.view === 'users' ? 'active' : ''}">Пользователи</button>
+          <button data-view="moderation" class="${state.view === 'moderation' ? 'active' : ''}">Модерация</button>
           <button data-view="audit" class="${state.view === 'audit' ? 'active' : ''}">Журнал действий</button>
         </div>
         <div class="sidebar-footer"><button id="open-site" class="ghost">Открыть SocialBIRD</button><button id="logout" class="ghost">Выйти</button></div>
       </aside>
       <main class="main">
-        <div class="topbar"><div><div class="title">${state.view === 'users' ? 'Пользователи' : state.view === 'audit' ? 'Аудит' : 'Состояние SocialBIRD'}</div><div class="subtle">Desktop-сессия защищена email 2FA и повторной проверкой роли на сервере.</div></div><button id="refresh" class="secondary" ${state.busy ? 'disabled' : ''}>${spinner()}Обновить</button></div>
+        <div class="topbar"><div><div class="title">${title}</div><div class="subtle">Desktop-сессия защищена email 2FA и повторной проверкой роли на сервере.</div></div><button id="refresh" class="secondary" ${state.busy ? 'disabled' : ''}>${spinner()}Обновить</button></div>
         ${messageBlock()}
         ${content}
       </main>
@@ -235,47 +258,98 @@ function renderDashboard() {
   document.getElementById('open-site').addEventListener('click', () => api.openSite());
   document.getElementById('logout').addEventListener('click', async () => {
     await api.logout();
-    Object.assign(state, { stage: 'login', challengeId: '', emailHint: '', admin: null, stats: null, users: [], audit: [], error: '', notice: '' });
+    Object.assign(state, { stage: 'login', challengeId: '', emailHint: '', admin: null, stats: null, users: [], posts: [], audit: [], error: '', notice: '' });
     render();
   });
 
-  if (state.view === 'users') {
-    document.getElementById('search-users').addEventListener('click', searchUsers);
-    document.getElementById('user-search').addEventListener('keydown', (event) => { if (event.key === 'Enter') searchUsers(); });
-    document.querySelectorAll('.block-btn').forEach((button) => button.addEventListener('click', async () => {
-      const id = Number(button.dataset.id);
-      const blocked = button.dataset.blocked === '1';
-      state.busy = true; render();
-      try {
-        await api.setBlocked({ id, blocked });
-        state.users = (await api.getUsers(state.query)).users || [];
-        state.notice = blocked ? 'Пользователь заблокирован.' : 'Пользователь разблокирован.';
-        state.error = '';
-      } catch (error) { state.error = error.message || String(error); }
-      state.busy = false; render();
-    }));
-    document.querySelectorAll('.role-select').forEach((select) => select.addEventListener('change', async () => {
-      const id = Number(select.dataset.id);
-      const role = select.value;
-      state.busy = true; render();
-      try {
-        await api.setRole({ id, role });
-        state.users = (await api.getUsers(state.query)).users || [];
-        state.notice = `Роль пользователя изменена на ${role}.`;
-        state.error = '';
-      } catch (error) { state.error = error.message || String(error); }
-      state.busy = false; render();
-    }));
-  }
+  if (state.view === 'users') bindUserActions();
+  if (state.view === 'moderation') bindModerationActions();
+}
+
+function bindUserActions() {
+  document.getElementById('search-users').addEventListener('click', searchUsers);
+  document.getElementById('user-search').addEventListener('keydown', (event) => { if (event.key === 'Enter') searchUsers(); });
+  document.querySelectorAll('.block-btn').forEach((button) => button.addEventListener('click', async () => {
+    const id = Number(button.dataset.id);
+    const blocked = button.dataset.blocked === '1';
+    let reason = '';
+    if (blocked) {
+      reason = String(window.prompt('Укажите причину блокировки пользователя:') || '').trim();
+      if (!reason) return;
+    }
+    state.busy = true;
+    state.error = '';
+    render();
+    try {
+      await api.setBlocked({ id, blocked, reason });
+      state.users = (await api.getUsers(state.query)).users || [];
+      state.notice = blocked ? 'Пользователь заблокирован.' : 'Пользователь разблокирован.';
+    } catch (error) {
+      state.error = error.message || String(error);
+    }
+    state.busy = false;
+    render();
+  }));
+  document.querySelectorAll('.role-select').forEach((select) => select.addEventListener('change', async () => {
+    const id = Number(select.dataset.id);
+    const role = select.value;
+    state.busy = true;
+    state.error = '';
+    render();
+    try {
+      await api.setRole({ id, role });
+      state.users = (await api.getUsers(state.query)).users || [];
+      state.notice = `Роль пользователя изменена на ${role}.`;
+    } catch (error) {
+      state.error = error.message || String(error);
+    }
+    state.busy = false;
+    render();
+  }));
+}
+
+function bindModerationActions() {
+  document.querySelectorAll('.post-status-btn').forEach((button) => button.addEventListener('click', async () => {
+    const id = Number(button.dataset.id);
+    const status = button.dataset.status;
+    state.busy = true;
+    state.error = '';
+    render();
+    try {
+      await api.setPostStatus({ id, status });
+      state.posts = await api.getPosts();
+      state.notice = status === 'принят' ? 'Публикация одобрена.' : 'Публикация отклонена.';
+    } catch (error) {
+      state.error = error.message || String(error);
+    }
+    state.busy = false;
+    render();
+  }));
+  document.querySelectorAll('.post-delete-btn').forEach((button) => button.addEventListener('click', async () => {
+    const id = Number(button.dataset.id);
+    if (!window.confirm('Удалить публикацию без возможности восстановления?')) return;
+    state.busy = true;
+    state.error = '';
+    render();
+    try {
+      await api.deletePost({ id });
+      state.posts = await api.getPosts();
+      state.notice = 'Публикация удалена.';
+    } catch (error) {
+      state.error = error.message || String(error);
+    }
+    state.busy = false;
+    render();
+  }));
 }
 
 async function searchUsers() {
   state.query = document.getElementById('user-search').value.trim();
   state.busy = true;
+  state.error = '';
   render();
   try {
     state.users = (await api.getUsers(state.query)).users || [];
-    state.error = '';
   } catch (error) {
     state.error = error.message || String(error);
   } finally {
