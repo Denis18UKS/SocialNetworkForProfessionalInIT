@@ -39,8 +39,8 @@ if (!source.includes(marker)) {
 
   mustRegex(
     'microphone recovery state',
-    /(\s*)const recovered = await recoverMicrophoneTrack\(localStreamRef\.current,\s*micEnabled\);/,
-    `$1const desiredMicEnabled = Boolean((window as ActiveCallWindow).__itbirdActiveCallState?.micEnabled ?? micEnabled);$1const recovered = await recoverMicrophoneTrack(localStreamRef.current, desiredMicEnabled);`,
+    /(^[ \t]*)const recovered = await recoverMicrophoneTrack\(localStreamRef\.current,\s*micEnabled\);/m,
+    `$1const desiredMicEnabled = Boolean((window as ActiveCallWindow).__itbirdActiveCallState?.micEnabled ?? micEnabled);\n$1const recovered = await recoverMicrophoneTrack(localStreamRef.current, desiredMicEnabled);`,
   );
 
   mustRegex(
@@ -61,12 +61,12 @@ if (!source.includes(marker)) {
   );
   mustRegex(
     'persistent sound publish',
-    /    setSoundEnabled\(next\);\n    if \(next\) \{/,
+    /    setSoundEnabled\(next\);\s*\n\s*if \(next\) \{/,
     `    setSoundEnabled(next);\n    publishGlobalCallState({ soundEnabled: next });\n    if (next) {`,
   );
   mustRegex(
     'forced sound publish',
-    /    setSoundEnabled\(true\);\n    void Promise\.all\(media\.map\(\(element\) => playRemoteMedia\(element\)\)\)\.then\(\(results\) => \{/,
+    /    setSoundEnabled\(true\);\s*\n\s*void Promise\.all\(media\.map\(\(element\) => playRemoteMedia\(element\)\)\)\.then\(\(results\) => \{/,
     `    setSoundEnabled(true);\n    publishGlobalCallState({ soundEnabled: true });\n    void Promise.all(media.map((element) => playRemoteMedia(element))).then((results) => {`,
   );
 
@@ -77,19 +77,19 @@ if (!source.includes(marker)) {
   );
   mustRegex(
     'video publish after camera add',
-    /        setVideoEnabled\(true\);\n        await Promise\.all\(Object\.keys\(peersRef\.current\)\.map\(\(id\) => renegotiate\(Number\(id\), "video"\)\)\);/,
-    `        setVideoEnabled(true);\n        publishGlobalCallState({ videoEnabled: true, callKind: 'video', localStream: localStreamRef.current });\n        await Promise.all(Object.keys(peersRef.current).map((id) => renegotiate(Number(id), "video")));`,
+    /(        setVideoEnabled\(true\);)([\s\S]*?await Promise\.all\(Object\.keys\(peersRef\.current\)\.map\(\(id\) => renegotiate\(Number\(id\), "video"\)\)\);)/,
+    `$1\n        publishGlobalCallState({ videoEnabled: true, callKind: 'video', localStream: localStreamRef.current });$2`,
   );
   mustRegex(
     'video publish normal toggle',
-    /    setVideoEnabled\(next\);\n    if \(next\) \{/,
-    `    setVideoEnabled(next);\n    publishGlobalCallState({ videoEnabled: next, callKind: next ? 'video' : callKind, localStream: localStreamRef.current });\n    if (next) {`,
+    /(    setVideoEnabled\(next\);)(\s*\n\s*if \(next\) \{)/,
+    `$1\n    publishGlobalCallState({ videoEnabled: next, callKind: next ? 'video' : callKind, localStream: localStreamRef.current });$2`,
   );
 
   mustRegex(
     'screen stop publish',
-    /    setScreenEnabled\(false\);\n    await Promise\.all\(Object\.keys\(peersRef\.current\)\.map\(\(id\) => renegotiate\(Number\(id\)\)\)\);/,
-    `    setScreenEnabled(false);\n    publishGlobalCallState({ screenEnabled: false, screenStream: null });\n    await Promise.all(Object.keys(peersRef.current).map((id) => renegotiate(Number(id))));`,
+    /(  const stopScreenShare = async \(\) => \{[\s\S]*?    setScreenEnabled\(false\);)/,
+    `$1\n    publishGlobalCallState({ screenEnabled: false, screenStream: null });`,
   );
   mustRegex(
     'persistent screen source',
@@ -98,31 +98,30 @@ if (!source.includes(marker)) {
   );
   mustRegex(
     'screen start publish',
-    /      setScreenEnabled\(true\);\n      if \(localScreenVideoRef\.current\) \{/,
-    `      setScreenEnabled(true);\n      publishGlobalCallState({ screenEnabled: true, screenStream: stream });\n      if (localScreenVideoRef.current) {`,
+    /(  const toggleScreenShare = async \(\) => \{[\s\S]*?      setScreenEnabled\(true\);)/,
+    `$1\n      publishGlobalCallState({ screenEnabled: true, screenStream: stream });`,
   );
 
   mustRegex(
     'peer leave bridge',
-    /    setParticipantSpeaking\(peerId, false\);\n  \};\n\n  const endCall/,
-    `    setParticipantSpeaking(peerId, false);\n    window.dispatchEvent(new CustomEvent('itbird-call-peer-left', { detail: { peerId } }));\n  };\n\n  const endCall`,
+    /(  const removeGroupPeer = \(peerId: number\) => \{[\s\S]*?    setParticipantSpeaking\(peerId, false\);)/,
+    `$1\n    window.dispatchEvent(new CustomEvent('itbird-call-peer-left', { detail: { peerId } }));`,
   );
 
   mustRegex(
     'global state clear',
-    /(    const windowWithCall = window as ActiveCallWindow;\n)(\s*if \(windowWithCall\.__itbirdActiveCallEnd === endCall\) delete windowWithCall\.__itbirdActiveCallEnd;)/,
-    `$1    windowWithCall.__itbirdActiveCallState = null;\n    window.dispatchEvent(new CustomEvent('itbird-call-state', { detail: null }));\n$2`,
+    /(  const endCall = \(\) => \{[\s\S]*?    const windowWithCall = window as ActiveCallWindow;)/,
+    `$1\n    windowWithCall.__itbirdActiveCallState = null;\n    window.dispatchEvent(new CustomEvent('itbird-call-state', { detail: null }));`,
   );
 
   mustRegex(
     'active call state bootstrap',
-    /    window\.dispatchEvent\(new CustomEvent\("itbird-call-active", \{\s*detail: \{ chatId, mode, title, callKind, targetIds: callTargets, participants: visibleCallParticipants \},\s*\}\)\);/,
-    `    const activeState = publishGlobalCallState({\n      micEnabled,\n      soundEnabled,\n      videoEnabled,\n      screenEnabled,\n      localStream: localStreamRef.current,\n      screenStream: screenStreamRef.current,\n    });\n    window.dispatchEvent(new CustomEvent("itbird-call-active", { detail: activeState }));`,
+    /(    windowWithCall\.__itbirdActiveCallToggleScreen = \(\) => \{[\s\S]*?    \};)\s*\n\s*window\.dispatchEvent\(new CustomEvent\("itbird-call-active", \{[\s\S]*?\}\)\);/,
+    `$1\n    const activeState = publishGlobalCallState({\n      micEnabled,\n      soundEnabled,\n      videoEnabled,\n      screenEnabled,\n      localStream: localStreamRef.current,\n      screenStream: screenStreamRef.current,\n    });\n    window.dispatchEvent(new CustomEvent("itbird-call-active", { detail: activeState }));`,
   );
 
   fs.writeFileSync(file, source, 'utf8');
 } else {
-  // Normalize CRLF on already-patched files too so future structural checks stay stable.
   fs.writeFileSync(file, source, 'utf8');
 }
 
