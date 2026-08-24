@@ -7,6 +7,7 @@ const API_BASE = String(process.env.SOCIALBIRD_ADMIN_API_URL || 'https://api.soc
 let loginToken = '';
 let desktopToken = '';
 let desktopTokenExpiresAt = 0;
+let cinemaWindow = null;
 const pickedCinemaFiles = new Map();
 
 const request = async (route, options = {}) => {
@@ -82,25 +83,25 @@ const mimeFromName = (name) => {
   return 'video/mp4';
 };
 
-const createWindow = () => {
-  const win = new BrowserWindow({
-    width: 1380,
-    height: 860,
-    minWidth: 1060,
-    minHeight: 700,
-    title: 'SocialBIRD Admin',
-    backgroundColor: '#0b1020',
-    autoHideMenuBar: true,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      webSecurity: true,
-      devTools: !app.isPackaged,
-    },
-  });
+const secureWindowOptions = ({ width, height, minWidth, minHeight, title }) => ({
+  width,
+  height,
+  minWidth,
+  minHeight,
+  title,
+  backgroundColor: '#0b1020',
+  autoHideMenuBar: true,
+  webPreferences: {
+    preload: path.join(__dirname, 'preload.cjs'),
+    contextIsolation: true,
+    nodeIntegration: false,
+    sandbox: true,
+    webSecurity: true,
+    devTools: !app.isPackaged,
+  },
+});
 
+const hardenWindowNavigation = (win) => {
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https:\/\//i.test(url)) shell.openExternal(url);
     return { action: 'deny' };
@@ -108,7 +109,38 @@ const createWindow = () => {
   win.webContents.on('will-navigate', (event, url) => {
     if (url !== win.webContents.getURL()) event.preventDefault();
   });
+};
+
+const createWindow = () => {
+  const win = new BrowserWindow(secureWindowOptions({
+    width: 1380,
+    height: 860,
+    minWidth: 1060,
+    minHeight: 700,
+    title: 'SocialBIRD Admin',
+  }));
+  hardenWindowNavigation(win);
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+};
+
+const openCinemaWindow = () => {
+  requireDesktopSession();
+  if (cinemaWindow && !cinemaWindow.isDestroyed()) {
+    cinemaWindow.show();
+    cinemaWindow.focus();
+    return { opened: true, reused: true };
+  }
+  cinemaWindow = new BrowserWindow(secureWindowOptions({
+    width: 1420,
+    height: 900,
+    minWidth: 1100,
+    minHeight: 720,
+    title: 'SocialBIRD Admin — C-Party библиотека',
+  }));
+  hardenWindowNavigation(cinemaWindow);
+  cinemaWindow.on('closed', () => { cinemaWindow = null; });
+  cinemaWindow.loadFile(path.join(__dirname, 'renderer', 'cinema.html'));
+  return { opened: true, reused: false };
 };
 
 ipcMain.handle('admin:login', async (_event, credentials) => {
@@ -172,6 +204,7 @@ ipcMain.handle('admin:set-role', (_event, payload) => request(`/admin/desktop/us
   method: 'PATCH', token: requireDesktopSession(), body: { role: String(payload?.role || '') },
 }));
 
+ipcMain.handle('admin:open-cinema-manager', () => openCinemaWindow());
 ipcMain.handle('admin:cinema-titles', (_event, filters = {}) => {
   const query = new URLSearchParams();
   if (filters.q) query.set('q', String(filters.q));
@@ -271,6 +304,7 @@ ipcMain.handle('admin:logout', () => {
   desktopToken = '';
   desktopTokenExpiresAt = 0;
   pickedCinemaFiles.clear();
+  if (cinemaWindow && !cinemaWindow.isDestroyed()) cinemaWindow.close();
   return { ok: true };
 });
 ipcMain.handle('admin:open-site', () => shell.openExternal('https://socialbird.ru'));
