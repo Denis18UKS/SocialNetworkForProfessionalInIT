@@ -109,10 +109,23 @@ ipcMain.handle('admin:confirm-code', async (_event, payload) => {
 ipcMain.handle('admin:stats', () => request('/admin/desktop/stats', { token: requireDesktopSession() }));
 ipcMain.handle('admin:users', (_event, query) => request(`/admin/desktop/users?q=${encodeURIComponent(String(query || ''))}&limit=200`, { token: requireDesktopSession() }));
 ipcMain.handle('admin:audit', () => request('/admin/desktop/audit?limit=120', { token: requireDesktopSession() }));
+ipcMain.handle('admin:posts', () => request('/admin/posts', { token: requireDesktopSession() }));
+ipcMain.handle('admin:set-post-status', (_event, payload) => request(`/admin/posts/${Number(payload?.id)}/status`, {
+  method: 'PATCH',
+  token: requireDesktopSession(),
+  body: { status: String(payload?.status || '') },
+}));
+ipcMain.handle('admin:delete-post', (_event, payload) => request(`/admin/posts/${Number(payload?.id)}`, {
+  method: 'DELETE',
+  token: requireDesktopSession(),
+}));
 ipcMain.handle('admin:block-user', (_event, payload) => request(`/admin/desktop/users/${Number(payload?.id)}/block`, {
   method: 'PATCH',
   token: requireDesktopSession(),
-  body: { blocked: Boolean(payload?.blocked) },
+  body: {
+    blocked: Boolean(payload?.blocked),
+    reason: String(payload?.reason || '').slice(0, 500),
+  },
 }));
 ipcMain.handle('admin:set-role', (_event, payload) => request(`/admin/desktop/users/${Number(payload?.id)}/role`, {
   method: 'PATCH',
