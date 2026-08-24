@@ -13,6 +13,7 @@ import {
   UserPlus,
   Users,
 } from "lucide-react";
+import { useEffect, useState } from "react";
 import type { ComponentType } from "react";
 import { Link, useLocation } from "react-router-dom";
 import {
@@ -28,6 +29,8 @@ import {
 } from "@/components/ui/sidebar";
 import { useAuth } from "@/pages/AuthContext";
 import { useI18n } from "@/lib/i18n";
+import { apiUrl } from "@/lib/settings";
+import { isNativeAndroidApp } from "@/lib/screen-share";
 
 type NavItem = {
   title: string;
@@ -35,21 +38,78 @@ type NavItem = {
   icon: ComponentType<{ className?: string }>;
 };
 
+type NativeVersionBridge = {
+  getVersionCode?: () => number;
+};
+
+const getInstalledAndroidVersionCode = () => {
+  if (!isNativeAndroidApp()) return 0;
+  try {
+    const bridge = (window as typeof window & { ITBirdAndroid?: NativeVersionBridge }).ITBirdAndroid;
+    return Number(bridge?.getVersionCode?.() || 0);
+  } catch {
+    return 0;
+  }
+};
+
 export function AppSidebar() {
   const { isAuthenticated, role, logout } = useAuth();
   const { isMobile, setOpenMobile } = useSidebar();
   const location = useLocation();
-  const { t } = useI18n();
+  const { t, language } = useI18n();
+  const [androidUpdateAvailable, setAndroidUpdateAvailable] = useState(false);
+
+  useEffect(() => {
+    if (!isNativeAndroidApp()) {
+      setAndroidUpdateAvailable(false);
+      return;
+    }
+
+    let cancelled = false;
+    const checkUpdate = async () => {
+      const installedVersionCode = getInstalledAndroidVersionCode();
+      if (installedVersionCode <= 0) {
+        if (!cancelled) setAndroidUpdateAvailable(false);
+        return;
+      }
+      try {
+        const response = await fetch(apiUrl("/android/version"), { cache: "no-store" });
+        const data = await response.json();
+        const latestVersionCode = Number(data?.versionCode || 0);
+        if (!cancelled) {
+          setAndroidUpdateAvailable(Boolean(response.ok && data?.available && latestVersionCode > installedVersionCode));
+        }
+      } catch {
+        if (!cancelled) setAndroidUpdateAvailable(false);
+      }
+    };
+
+    void checkUpdate();
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void checkUpdate();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, []);
 
   const closeMobile = () => {
     if (isMobile) setOpenMobile(false);
   };
 
+  const androidTitle = androidUpdateAvailable
+    ? (language === "ru" ? "Обновление приложения" : "App update")
+    : t("androidApp");
+
   const publicItems: NavItem[] = [
     { title: t("home"), url: "/", icon: Home },
     { title: t("hackathons"), url: "/xakatons", icon: Award },
     { title: t("onlineCompiler"), url: "/compiler", icon: Code2 },
-    { title: t("androidApp"), url: "/android-app", icon: Smartphone },
+    { title: androidTitle, url: "/android-app", icon: Smartphone },
   ];
 
   const authItems: NavItem[] = [
