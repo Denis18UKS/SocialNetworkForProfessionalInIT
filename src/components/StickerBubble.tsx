@@ -15,11 +15,12 @@ const StickerBubble = ({ stickerId }: { stickerId: number }) => {
   }, [stickerId]);
 
   if (!src) {
-    return <div className="h-24 w-24 animate-pulse rounded-2xl bg-muted/60" aria-label="Загрузка стикера" />;
+    return <div data-sticker-message="true" className="h-24 w-24 animate-pulse rounded-2xl bg-muted/60" aria-label="Загрузка стикера" />;
   }
 
   return (
     <img
+      data-sticker-message="true"
       src={src}
       alt="Стикер"
       className="block h-auto max-h-52 w-auto max-w-[min(220px,60vw)] select-none object-contain"
