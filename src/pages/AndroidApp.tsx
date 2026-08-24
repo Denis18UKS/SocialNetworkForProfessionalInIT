@@ -29,6 +29,12 @@ type AndroidReleaseInfo = {
 const getBridge = (): NativeBridge | undefined =>
   (window as typeof window & { ITBirdAndroid?: NativeBridge }).ITBirdAndroid;
 
+const versionNameFallbackCode = (versionName: string) => {
+  const parts = String(versionName || "").split(".");
+  const last = Number(parts.at(-1) || 0);
+  return Number.isInteger(last) && last > 0 ? last : 0;
+};
+
 const AndroidApp = () => {
   const { language } = useI18n();
   const ru = language === "ru";
@@ -80,11 +86,17 @@ const AndroidApp = () => {
     };
   }, [native]);
 
+  const installedComparableCode = useMemo(() => {
+    const nativeCode = Number(versionCode || 0);
+    if (Number.isInteger(nativeCode) && nativeCode > 0) return nativeCode;
+    return versionNameFallbackCode(version);
+  }, [versionCode, version]);
+
   const updateAvailable = useMemo(() => {
     if (!native || !latest?.available) return false;
     const latestCode = Number(latest.versionCode || 0);
-    return latestCode > 0 && versionCode > 0 && latestCode > versionCode;
-  }, [native, latest, versionCode]);
+    return latestCode > 0 && installedComparableCode > 0 && latestCode > installedComparableCode;
+  }, [native, latest, installedComparableCode]);
 
   const resolvedApkUrl = latest?.apkUrl || APK_URL;
   const heading = updateAvailable
@@ -120,8 +132,8 @@ const AndroidApp = () => {
             <CardTitle>{ru ? "Доступно обновление приложения" : "App update available"}</CardTitle>
             <CardDescription>
               {ru
-                ? `Новая версия: ${latest?.versionName || "последняя"}. Кнопка появляется только когда versionCode опубликованного APK выше установленного.`
-                : `New version: ${latest?.versionName || "latest"}. This button appears only when the published APK versionCode is newer than the installed one.`}
+                ? `Новая версия: ${latest?.versionName || "последняя"}. Кнопка появляется только когда опубликованный APK действительно новее установленной версии.`
+                : `New version: ${latest?.versionName || "latest"}. This button appears only when the published APK is actually newer than the installed version.`}
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-2">
