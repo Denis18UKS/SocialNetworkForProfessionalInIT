@@ -9,6 +9,7 @@ on:
       - "android-app/**"
       - "deploy/apply-android-runtime-fixes.mjs"
       - "deploy/apply-native-fcm-android.mjs"
+      - "deploy/apply-android-update-awareness.mjs"
       - ".github/workflows/android-apk.yml"
 
 permissions:
@@ -32,16 +33,19 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Apply native Android runtime and FCM integration
+      - name: Apply native Android runtime, FCM and update integration
         run: |
           node --check deploy/apply-android-runtime-fixes.mjs
           node --check deploy/apply-native-fcm-android.mjs
+          node --check deploy/apply-android-update-awareness.mjs
           node deploy/apply-android-runtime-fixes.mjs
           node deploy/apply-native-fcm-android.mjs
+          node deploy/apply-android-update-awareness.mjs
           grep -q "NATIVE_ANDROID_RUNTIME: initialize-runtime" android-app/app/src/main/java/io/itbird/socialbird/MainActivity.java
           grep -q "NATIVE_ANDROID_RUNTIME: answer-intent" android-app/app/src/main/java/io/itbird/socialbird/MainActivity.java
           grep -q "NATIVE_ANDROID_RUNTIME: web-fullscreen" android-app/app/src/main/java/io/itbird/socialbird/MainActivity.java
           grep -q "NATIVE_FCM_PUSH" android-app/app/src/main/java/io/itbird/socialbird/MainActivity.java
+          grep -q "ANDROID_UPDATE_AWARENESS: expose-version-code" android-app/app/src/main/java/io/itbird/socialbird/MainActivity.java
           grep -q "SocialBirdFirebaseMessagingService" android-app/app/src/main/AndroidManifest.xml
           grep -q "firebase-messaging" android-app/app/build.gradle
 
@@ -106,16 +110,20 @@ jobs:
           SOCIALBIRD_FIREBASE_SENDER_ID: ${{ vars.SOCIALBIRD_FIREBASE_SENDER_ID }}
         run: gradle -p android-app assembleDebug --no-daemon --stacktrace
 
-      - name: Prepare stable APK name
+      - name: Prepare stable APK and version metadata
         run: |
           cp android-app/app/build/outputs/apk/debug/app-debug.apk SocialBIRD-Android.apk
           test -s SocialBIRD-Android.apk
+          node -e "const fs=require('fs');const n=Number(process.env.GITHUB_RUN_NUMBER);fs.writeFileSync('SocialBIRD-Android-version.json',JSON.stringify({versionCode:n,versionName:'1.2.'+n,publishedAt:new Date().toISOString()},null,2)+'\\n')"
+          test -s SocialBIRD-Android-version.json
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: SocialBIRD-Android
-          path: SocialBIRD-Android.apk
+          path: |
+            SocialBIRD-Android.apk
+            SocialBIRD-Android-version.json
           if-no-files-found: error
 
       - name: Publish stable android-latest download
@@ -123,10 +131,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view android-latest >/dev/null 2>&1; then
-            gh release upload android-latest SocialBIRD-Android.apk --clobber
+            gh release upload android-latest SocialBIRD-Android.apk SocialBIRD-Android-version.json --clobber
           else
-            gh release create android-latest SocialBIRD-Android.apk \
+            gh release create android-latest SocialBIRD-Android.apk SocialBIRD-Android-version.json \
               --title "SocialBIRD Android" \
-              --notes "SocialBIRD Android: тот же production React/WebRTC, FCM push-звонки и уведомления, CallStyle/full-screen incoming call UI, PiP, MediaProjection, системный звук, камера/микрофон и файлы." \
+              --notes "SocialBIRD Android: тот же production React/WebRTC, FCM push-звонки и уведомления, CallStyle/full-screen incoming call UI, PiP, MediaProjection, системный звук, камера/микрофон, файлы и проверка реальных обновлений APK." \
               --prerelease
           fi
