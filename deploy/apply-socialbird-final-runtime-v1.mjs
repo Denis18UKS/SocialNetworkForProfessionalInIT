@@ -13,6 +13,7 @@ const patchServer = () => {
   let source = read(file);
   const earlyMarker = '// SOCIALBIRD_FINAL_PLATFORM_V1: early-middleware';
   const routesMarker = '// SOCIALBIRD_FINAL_PLATFORM_V1: final-routes';
+  const adminCinemaMarker = '// SOCIALBIRD_ADMIN_CINEMA_V1: routes';
 
   if (!source.includes(earlyMarker)) {
     const anchor = 'const app = express();';
@@ -25,7 +26,13 @@ const patchServer = () => {
     source = replaceOnce(source, 'backend final route anchor', anchor, block);
   }
 
-  for (const expected of [earlyMarker, routesMarker, 'registerStrictPrivacyGate({ app', 'registerSocialBirdFinalPlatform({ app', 'registerCinemaQr({ app', 'registerCinemaStream({ app']) {
+  if (!source.includes(adminCinemaMarker)) {
+    const anchor = 'registerCinemaStream({ app, db });';
+    const block = `${anchor}\n\n${adminCinemaMarker}\nconst { registerAdminCinemaLibrary } = require('./admin-cinema-library');\nregisterAdminCinemaLibrary({ app, db });`;
+    source = replaceOnce(source, 'admin cinema route anchor', anchor, block);
+  }
+
+  for (const expected of [earlyMarker, routesMarker, adminCinemaMarker, 'registerStrictPrivacyGate({ app', 'registerSocialBirdFinalPlatform({ app', 'registerCinemaQr({ app', 'registerCinemaStream({ app', 'registerAdminCinemaLibrary({ app']) {
     if (!source.includes(expected)) throw new Error(`Final backend verification failed: ${expected}`);
   }
   write(file, source);
@@ -112,4 +119,4 @@ patchUsers();
 patchSettings();
 patchCinemaRoom();
 
-console.log('SocialBIRD final runtime patch applied: backend wiring, creator clear, restricted cards, email settings and C-Party episode URLs are current.');
+console.log('SocialBIRD final runtime patch applied: backend wiring, creator clear, restricted cards, email settings, C-Party episode URLs and Admin Cinema Library are current.');
