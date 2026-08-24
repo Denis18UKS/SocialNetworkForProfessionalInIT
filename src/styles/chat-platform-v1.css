@@ -11,20 +11,20 @@
   box-sizing: border-box;
 }
 
-.socialbird-chat-workspace [data-chat-message-row="true"] {
+.socialbird-message-row {
   width: 100%;
   max-width: 100%;
   min-width: 0;
 }
 
-.socialbird-chat-workspace [data-chat-message-bubble="true"] {
+.socialbird-message-bubble {
   min-width: 0;
-  max-width: min(82%, 680px);
+  max-width: min(82%, 680px) !important;
   overflow-wrap: anywhere;
   word-break: break-word;
 }
 
-.socialbird-chat-workspace [data-sticker-message="true"] {
+.socialbird-message-bubble:has([data-sticker-message="true"]) {
   background: transparent !important;
   box-shadow: none !important;
   padding: 0 !important;
@@ -83,11 +83,11 @@
 }
 
 @media (max-width: 767px) {
-  .socialbird-chat-workspace [data-chat-message-bubble="true"] {
-    max-width: min(88%, calc(100vw - 34px));
+  .socialbird-message-bubble {
+    max-width: min(88%, calc(100vw - 34px)) !important;
   }
 
-  .socialbird-chat-workspace [data-sticker-message="true"] {
+  .socialbird-message-bubble:has([data-sticker-message="true"]) {
     max-width: min(62vw, 210px) !important;
   }
 
