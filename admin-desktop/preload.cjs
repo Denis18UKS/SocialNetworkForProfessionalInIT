@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('socialBirdAdmin', Object.freeze({
   deleteUser: (payload) => ipcRenderer.invoke('admin:delete-user', payload),
   setRole: (payload) => ipcRenderer.invoke('admin:set-role', payload),
 
+  openCinemaManager: () => ipcRenderer.invoke('admin:open-cinema-manager'),
   getCinemaTitles: (filters) => ipcRenderer.invoke('admin:cinema-titles', filters),
   getCinemaTitle: (id) => ipcRenderer.invoke('admin:cinema-title', id),
   createCinemaTitle: (payload) => ipcRenderer.invoke('admin:cinema-create-title', payload),
