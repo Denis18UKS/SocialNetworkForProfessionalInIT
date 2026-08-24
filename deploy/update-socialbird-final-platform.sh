@@ -50,7 +50,7 @@ echo "[1/10] Fetching final platform"
 sudo -u "$APP_USER" git fetch origin +"$BRANCH:refs/remotes/origin/$BRANCH"
 sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   backend/socialbird-final-platform.js backend/strict-privacy-gate.js backend/stable-news-time.js \
-  backend/cinema-qr.js backend/cinema-stream.js \
+  backend/cinema-qr.js backend/cinema-stream.js backend/admin-cinema-library.js \
   src/App.tsx src/components/VoiceCallControls.tsx src/components/GlobalCallOverlay.tsx \
   src/components/StrictUserProfileRoute.tsx src/components/AppSidebar.tsx \
   src/lib/call-audio-reliability.ts \
@@ -60,10 +60,12 @@ sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   deploy/harden-source.mjs deploy/enable-sandbox-compiler.mjs
 
 echo "[2/10] Checking modules"
-for f in backend/socialbird-final-platform.js backend/strict-privacy-gate.js backend/stable-news-time.js backend/cinema-qr.js backend/cinema-stream.js deploy/apply-global-call-overlay-v1.mjs deploy/apply-socialbird-final-runtime-v1.mjs; do node --check "$f"; done
+for f in backend/socialbird-final-platform.js backend/strict-privacy-gate.js backend/stable-news-time.js backend/cinema-qr.js backend/cinema-stream.js backend/admin-cinema-library.js deploy/apply-global-call-overlay-v1.mjs deploy/apply-socialbird-final-runtime-v1.mjs; do node --check "$f"; done
 require_text backend/socialbird-final-platform.js "cinemaResumableUpload: true" "C-Party resumable upload"
 require_text backend/socialbird-final-platform.js "videoRecompression: false" "original video quality"
 require_text backend/strict-privacy-gate.js "profile_restricted: true" "strict profile privacy"
+require_text backend/admin-cinema-library.js "registerAdminCinemaLibrary" "Admin C-Party library API"
+require_text backend/admin-cinema-library.js "DISK_RESERVE_BYTES" "safe cinema disk guard"
 require_text src/components/VoiceCallControls.tsx "CALL_RELIABILITY: persistent-audio-and-health" "canonical v4 call reliability source"
 require_text src/components/VoiceCallControls.tsx "APP_FIX: removable-screen-track" "canonical v4 screen sharing source"
 
@@ -72,6 +74,7 @@ sudo -u "$APP_USER" node deploy/apply-global-call-overlay-v1.mjs
 sudo -u "$APP_USER" node deploy/apply-socialbird-final-runtime-v1.mjs
 require_text backend/server.js "SOCIALBIRD_FINAL_PLATFORM_V1: early-middleware" "privacy/news middleware"
 require_text backend/server.js "SOCIALBIRD_FINAL_PLATFORM_V1: final-routes" "final backend routes"
+require_text backend/server.js "SOCIALBIRD_ADMIN_CINEMA_V1: routes" "Admin Cinema routes wired"
 require_text src/components/VoiceCallControls.tsx "SOCIALBIRD_GLOBAL_CALL_V1: persistent-call-state" "persistent global call"
 require_text src/App.tsx "<GlobalCallOverlay />" "global call overlay"
 require_text src/pages/GroupChats.tsx "messages/all-v2" "creator clear-all UI"
@@ -87,6 +90,7 @@ sudo -u "$APP_USER" node deploy/harden-source.mjs
 sudo -u "$APP_USER" node deploy/enable-sandbox-compiler.mjs
 node --check backend/server.production.js
 require_text backend/server.production.js "SOCIALBIRD_FINAL_PLATFORM_V1: final-routes" "final routes in production backend"
+require_text backend/server.production.js "SOCIALBIRD_ADMIN_CINEMA_V1: routes" "Admin Cinema routes in production backend"
 require_text backend/server.production.js "SOCIALBIRD_CHAT_PLATFORM_V1: resumable-upload-stickers" "Chat Platform v4 preserved"
 require_text backend/server.production.js "NATIVE_FCM_PUSH: register-routes" "FCM preserved"
 require_text backend/server.production.js "PRODUCTION_HARDENING: sandboxed-compiler-route" "compiler sandbox preserved"
@@ -127,8 +131,11 @@ require_text /tmp/socialbird-admin.json '"enabled":true' "Admin Desktop remains 
 
 FOLDERS_CODE="$(curl -sS -o /tmp/folders-auth.json -w '%{http_code}' http://127.0.0.1:5000/chat-folders || true)"
 CINEMA_CODE="$(curl -sS -o /tmp/cinema-auth.json -w '%{http_code}' http://127.0.0.1:5000/cinema/rooms || true)"
+ADMIN_CINEMA_CODE="$(curl -sS -o /tmp/admin-cinema-auth.json -w '%{http_code}' http://127.0.0.1:5000/admin/desktop/cinema/titles || true)"
 [[ "$FOLDERS_CODE" == "401" ]] || { echo "Unexpected /chat-folders status: $FOLDERS_CODE" >&2; false; }
 [[ "$CINEMA_CODE" == "401" ]] || { echo "Unexpected /cinema/rooms status: $CINEMA_CODE" >&2; false; }
+[[ "$ADMIN_CINEMA_CODE" == "401" ]] || { echo "Unexpected Admin Cinema status: $ADMIN_CINEMA_CODE" >&2; false; }
+echo "  OK: Admin Cinema API requires desktop admin session"
 
 echo "[10/10] Saving stable PM2 state"
 sudo -u "$APP_USER" env PM2_HOME="$PM2_HOME_DIR" pm2 save
@@ -139,5 +146,5 @@ chown -R "$APP_USER:$APP_USER" backend src dist 2>/dev/null || true
 
 echo
 echo "SocialBIRD final platform deployed successfully."
-echo "Included: global persistent calls/fullscreen streams, strict profiles, remove-friend flow, chat folders, verified email change, creator-only group clear, stable news time and C-Party."
+echo "Included: global persistent calls/fullscreen streams, strict profiles, remove-friend flow, chat folders, verified email change, creator-only group clear, stable news time, C-Party and Admin Cinema Library uploads."
 echo "Backup: $BACKUP_DIR"
