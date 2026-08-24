@@ -17,6 +17,7 @@ type CallState = {
   screenStream?: MediaStream | null;
 };
 
+type RemoteStreamEvent = { peerId: number; stream: MediaStream; label?: string };
 type CallWindow = Window & {
   __itbirdActiveCallEnd?: () => void;
   __itbirdActiveCallToggleMic?: () => void;
@@ -34,12 +35,28 @@ const fullscreen = async (element: HTMLElement | null) => {
   } catch {}
 };
 
+const RemoteVideo = ({ peerId, stream }: { peerId: number; stream: MediaStream }) => {
+  const ref = useRef<HTMLVideoElement | null>(null);
+  useEffect(() => {
+    if (!ref.current) return;
+    ref.current.srcObject = stream;
+    void ref.current.play().catch(() => undefined);
+  }, [stream]);
+  return (
+    <div className="relative overflow-hidden rounded-xl border border-white/10 bg-black">
+      <div className="absolute left-2 top-2 z-10 rounded bg-black/65 px-2 py-1 text-[11px]">Участник #{peerId}</div>
+      <video ref={ref} autoPlay playsInline muted className="max-h-[52dvh] w-full cursor-zoom-in object-contain" onDoubleClick={() => void fullscreen(ref.current)} />
+      <button type="button" onClick={() => void fullscreen(ref.current)} className="absolute bottom-2 right-2 rounded-lg bg-black/70 p-2 hover:bg-black/90" title="На весь экран"><Maximize2 className="h-4 w-4" /></button>
+    </div>
+  );
+};
+
 const GlobalCallOverlay = () => {
   const [call, setCall] = useState<CallState | null>(null);
   const [minimized, setMinimized] = useState(false);
+  const [remoteStreams, setRemoteStreams] = useState<Record<number, MediaStream>>({});
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const screenVideoRef = useRef<HTMLVideoElement | null>(null);
-  const remoteRootRef = useRef<HTMLDivElement | null>(null);
 
   const syncFromWindow = () => {
     const state = (window as CallWindow).__itbirdActiveCallState || null;
@@ -53,17 +70,38 @@ const GlobalCallOverlay = () => {
       setCall({ ...(state || {}), ...detail });
     };
     const onState = () => syncFromWindow();
+    const onRemote = (event: Event) => {
+      const detail = (event as CustomEvent<RemoteStreamEvent>).detail;
+      if (!detail?.stream || !Number.isFinite(Number(detail.peerId))) return;
+      const stream = detail.stream.getVideoTracks().length > 0 ? new MediaStream(detail.stream.getVideoTracks()) : null;
+      if (!stream) return;
+      setRemoteStreams((current) => ({ ...current, [Number(detail.peerId)]: stream }));
+    };
+    const onPeerLeft = (event: Event) => {
+      const peerId = Number((event as CustomEvent<{ peerId: number }>).detail?.peerId);
+      if (!Number.isFinite(peerId)) return;
+      setRemoteStreams((current) => {
+        const next = { ...current };
+        delete next[peerId];
+        return next;
+      });
+    };
     const onEnded = () => {
       setCall(null);
       setMinimized(false);
+      setRemoteStreams({});
     };
     window.addEventListener("itbird-call-active", onActive);
     window.addEventListener("itbird-call-state", onState);
+    window.addEventListener("itbird-call-remote-stream", onRemote);
+    window.addEventListener("itbird-call-peer-left", onPeerLeft);
     window.addEventListener("itbird-call-ended", onEnded);
     syncFromWindow();
     return () => {
       window.removeEventListener("itbird-call-active", onActive);
       window.removeEventListener("itbird-call-state", onState);
+      window.removeEventListener("itbird-call-remote-stream", onRemote);
+      window.removeEventListener("itbird-call-peer-left", onPeerLeft);
       window.removeEventListener("itbird-call-ended", onEnded);
     };
   }, []);
@@ -79,27 +117,7 @@ const GlobalCallOverlay = () => {
     }
   }, [call?.localStream, call?.screenStream, call?.videoEnabled, call?.screenEnabled]);
 
-  useEffect(() => {
-    const root = remoteRootRef.current;
-    if (!root) return;
-    const prepare = () => {
-      root.querySelectorAll<HTMLVideoElement>("video").forEach((video) => {
-        video.title = "Нажмите дважды, чтобы открыть на весь экран";
-        video.classList.add("cursor-zoom-in", "max-h-[52dvh]", "w-full", "object-contain");
-        if (video.dataset.fullscreenBound === "1") return;
-        video.dataset.fullscreenBound = "1";
-        video.addEventListener("dblclick", () => { void fullscreen(video); });
-      });
-    };
-    prepare();
-    const observer = new MutationObserver(prepare);
-    observer.observe(root, { childList: true, subtree: true });
-    return () => observer.disconnect();
-  }, [call]);
-
-  if (!call) {
-    return <div id="itbird-global-call-video" ref={remoteRootRef} className="hidden" />;
-  }
+  if (!call) return null;
 
   const controls = window as CallWindow;
   const participants = call.participants || [];
@@ -127,13 +145,11 @@ const GlobalCallOverlay = () => {
       <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-4">
         {participants.length > 0 && (
           <div className="mb-3 flex flex-wrap gap-2">
-            {participants.map((participant) => (
-              <div key={participant.id} className="rounded-full bg-white/10 px-2.5 py-1 text-xs">{participant.username}</div>
-            ))}
+            {participants.map((participant) => <div key={participant.id} className="rounded-full bg-white/10 px-2.5 py-1 text-xs">{participant.username}</div>)}
           </div>
         )}
 
-        <div id="itbird-global-call-video" ref={remoteRootRef} className="grid min-h-0 w-full grid-cols-1 gap-3 sm:grid-cols-2" />
+        {Object.keys(remoteStreams).length > 0 && <div className="grid min-h-0 w-full grid-cols-1 gap-3 sm:grid-cols-2">{Object.entries(remoteStreams).map(([peerId, stream]) => <RemoteVideo key={`${peerId}-${stream.id}`} peerId={Number(peerId)} stream={stream} />)}</div>}
 
         {(call.videoEnabled || call.screenEnabled) && (
           <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -153,8 +169,6 @@ const GlobalCallOverlay = () => {
             )}
           </div>
         )}
-
-        <div className="mt-2 text-center text-[11px] text-white/45">Чужое видео или демонстрацию можно открыть на весь экран двойным нажатием/двойным кликом.</div>
       </div>
 
       <div className="flex flex-wrap items-center justify-center gap-2 border-t border-white/10 p-3">
