@@ -181,8 +181,11 @@ function renderUsers() {
       <td>${esc(user.email)}</td>
       <td>${esc(user.github_username || '—')}</td>
       <td><select class="role-select" data-id="${esc(user.id)}"><option value="user" ${String(user.role || 'user') === 'user' ? 'selected' : ''}>user</option><option value="admin" ${user.role === 'admin' ? 'selected' : ''}>admin</option></select></td>
-      <td><span class="badge ${blocked ? 'warn' : 'good'}">${blocked ? 'Заблокирован' : 'Активен'}</span>${blocked && user.reason_blocked ? `<div class="subtle">${esc(user.reason_blocked)}</div>` : ''}</td>
-      <td><div class="actions"><button class="${blocked ? 'secondary' : 'danger'} small block-btn" data-id="${esc(user.id)}" data-blocked="${blocked ? '0' : '1'}">${blocked ? 'Разблокировать' : 'Заблокировать'}</button></div></td>
+      <td><span class="badge ${blocked ? 'warn' : 'good'}">${blocked ? 'Заблокирован' : 'Активен'}</span></td>
+      <td><div class="actions">
+        <button class="${blocked ? 'secondary' : 'danger'} small block-btn" data-id="${esc(user.id)}" data-blocked="${blocked ? '0' : '1'}">${blocked ? 'Разблокировать' : 'Заблокировать'}</button>
+        <button class="danger small delete-user-btn" data-id="${esc(user.id)}" data-name="${esc(user.username)}">Удалить</button>
+      </div></td>
     </tr>`;
   }).join('');
   return `
@@ -284,6 +287,25 @@ function bindUserActions() {
       await api.setBlocked({ id, blocked, reason });
       state.users = (await api.getUsers(state.query)).users || [];
       state.notice = blocked ? 'Пользователь заблокирован.' : 'Пользователь разблокирован.';
+    } catch (error) {
+      state.error = error.message || String(error);
+    }
+    state.busy = false;
+    render();
+  }));
+  document.querySelectorAll('.delete-user-btn').forEach((button) => button.addEventListener('click', async () => {
+    const id = Number(button.dataset.id);
+    const name = String(button.dataset.name || `#${id}`);
+    if (!window.confirm(`Удалить пользователя ${name}? Аккаунт будет деактивирован и анонимизирован, чтобы не сломать связанные сообщения.`)) return;
+    const reason = String(window.prompt('Причина удаления:', 'Удалено администратором') || '').trim();
+    if (!reason) return;
+    state.busy = true;
+    state.error = '';
+    render();
+    try {
+      await api.deleteUser({ id, reason });
+      state.users = (await api.getUsers(state.query)).users || [];
+      state.notice = 'Пользователь удалён и деактивирован.';
     } catch (error) {
       state.error = error.message || String(error);
     }
