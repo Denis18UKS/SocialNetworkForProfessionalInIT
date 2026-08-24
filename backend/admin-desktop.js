@@ -96,13 +96,23 @@ const registerAdminDesktop = ({ app, db, transporter, getOnlineUserIds }) => {
         ).catch((error) => console.warn('Admin audit write failed:', error.message));
     };
 
+    const sendAccountStatusEmail = async (user, blocked, reason) => {
+        if (!transporter || !user?.email) return;
+        const subject = blocked ? 'Ваш аккаунт SocialBIRD заблокирован' : 'Ваш аккаунт SocialBIRD разблокирован';
+        const text = blocked
+            ? `Ваш аккаунт SocialBIRD заблокирован администратором. Причина: ${reason}`
+            : 'Ваш аккаунт SocialBIRD разблокирован. Теперь вы снова можете пользоваться сервисом.';
+        await transporter.sendMail({
+            from: process.env.SMTP_FROM || process.env.SMTP_USER,
+            to: user.email,
+            subject,
+            text,
+        }).catch((error) => console.warn('Admin account status email failed:', error.message));
+    };
+
     app.get('/admin/desktop/status', async (req, res) => {
         await ensureSchema();
-        res.json({
-            enabled: true,
-            twoFactorRequired: true,
-            sessionMinutes: 30,
-        });
+        res.json({ enabled: true, twoFactorRequired: true, sessionMinutes: 30 });
     });
 
     app.post('/admin/desktop/request-code', verifyNormalAdminToken, async (req, res) => {
@@ -216,14 +226,7 @@ const registerAdminDesktop = ({ app, db, transporter, getOnlineUserIds }) => {
     });
 
     app.get('/admin/desktop/session', verifyDesktopAdmin, async (req, res) => {
-        res.json({
-            ok: true,
-            admin: {
-                id: req.desktopAdmin.id,
-                username: req.desktopAdmin.username,
-                email: req.desktopAdmin.email,
-            },
-        });
+        res.json({ ok: true, admin: { id: req.desktopAdmin.id, username: req.desktopAdmin.username, email: req.desktopAdmin.email } });
     });
 
     app.get('/admin/desktop/stats', verifyDesktopAdmin, async (req, res) => {
@@ -233,12 +236,14 @@ const registerAdminDesktop = ({ app, db, transporter, getOnlineUserIds }) => {
             const [adminRows] = await db.query("SELECT COUNT(*) AS count FROM users WHERE role = 'admin'");
             const [pendingRows] = await db.query('SELECT COUNT(*) AS count FROM pending_registrations').catch(() => [[{ count: 0 }]]);
             const [pushRows] = await db.query('SELECT COUNT(*) AS count FROM native_push_tokens').catch(() => [[{ count: 0 }]]);
+            const [pendingPostRows] = await db.query("SELECT COUNT(*) AS count FROM posts WHERE status = 'ожидание'").catch(() => [[{ count: 0 }]]);
             const onlineIds = typeof getOnlineUserIds === 'function' ? getOnlineUserIds() : [];
             res.json({
                 users: Number(totalRows[0]?.count || 0),
                 blocked: Number(blockedRows[0]?.count || 0),
                 admins: Number(adminRows[0]?.count || 0),
                 pendingRegistrations: Number(pendingRows[0]?.count || 0),
+                pendingPosts: Number(pendingPostRows[0]?.count || 0),
                 nativePushTokens: Number(pushRows[0]?.count || 0),
                 onlineUsers: Array.isArray(onlineIds) ? onlineIds.length : 0,
                 smtpConfigured: Boolean(transporter),
@@ -258,14 +263,14 @@ const registerAdminDesktop = ({ app, db, transporter, getOnlineUserIds }) => {
             const pattern = `%${query}%`;
             const [rows] = query
                 ? await db.query(
-                    `SELECT id, username, email, user_tag, role, isBlocked, github_username, gitlab_username
+                    `SELECT id, username, email, user_tag, role, isBlocked, reason_blocked, github_username, gitlab_username
                      FROM users
                      WHERE username LIKE ? OR email LIKE ? OR user_tag LIKE ?
                      ORDER BY id DESC LIMIT ?`,
                     [pattern, pattern, pattern, limit]
                   )
                 : await db.query(
-                    `SELECT id, username, email, user_tag, role, isBlocked, github_username, gitlab_username
+                    `SELECT id, username, email, user_tag, role, isBlocked, reason_blocked, github_username, gitlab_username
                      FROM users ORDER BY id DESC LIMIT ?`,
                     [limit]
                   );
@@ -279,18 +284,25 @@ const registerAdminDesktop = ({ app, db, transporter, getOnlineUserIds }) => {
     app.patch('/admin/desktop/users/:id/block', verifyDesktopAdmin, async (req, res) => {
         const targetId = Number(req.params.id);
         const blocked = Boolean(req.body?.blocked);
+        const reason = String(req.body?.reason || '').trim().slice(0, 500);
         if (!Number.isInteger(targetId) || targetId <= 0) return res.status(400).json({ message: 'Некорректный пользователь.' });
         if (targetId === Number(req.desktopAdmin.id) && blocked) {
             return res.status(400).json({ message: 'Нельзя заблокировать собственный активный admin-аккаунт.' });
         }
+        if (blocked && !reason) {
+            return res.status(400).json({ message: 'Укажите причину блокировки.' });
+        }
         try {
-            const [result] = await db.query(
-                'UPDATE users SET isBlocked = ? WHERE id = ?',
-                [blocked ? 'заблокирован' : null, targetId]
-            );
-            if (!result.affectedRows) return res.status(404).json({ message: 'Пользователь не найден.' });
-            await audit(req.desktopAdmin.id, blocked ? 'block_user' : 'unblock_user', 'user', targetId);
-            res.json({ ok: true, blocked });
+            const [users] = await db.query('SELECT id, username, email FROM users WHERE id = ? LIMIT 1', [targetId]);
+            if (users.length === 0) return res.status(404).json({ message: 'Пользователь не найден.' });
+            if (blocked) {
+                await db.query("UPDATE users SET isBlocked = 'заблокирован', reason_blocked = ? WHERE id = ?", [reason, targetId]);
+            } else {
+                await db.query("UPDATE users SET isBlocked = 'активен', reason_blocked = NULL WHERE id = ?", [targetId]);
+            }
+            await audit(req.desktopAdmin.id, blocked ? 'block_user' : 'unblock_user', 'user', targetId, blocked ? { reason } : null);
+            void sendAccountStatusEmail(users[0], blocked, reason);
+            res.json({ ok: true, blocked, status: blocked ? 'заблокирован' : 'активен' });
         } catch (error) {
             console.error('Admin block update failed:', error.message);
             res.status(500).json({ message: 'Не удалось изменить блокировку.' });
