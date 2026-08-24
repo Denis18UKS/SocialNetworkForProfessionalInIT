@@ -1,0 +1,72 @@
+name: Build SocialBIRD Admin Desktop
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - deploy/socialbird-vps-production
+    paths:
+      - "admin-desktop/**"
+      - ".github/workflows/admin-desktop.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: socialbird-admin-desktop
+  cancel-in-progress: true
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: admin-desktop
+    steps:
+      - name: Checkout production branch
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: admin-desktop/package-lock.json
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build Windows installer
+        run: npm run dist:win
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Verify installer
+        shell: pwsh
+        run: |
+          $file = "dist/SocialBIRD-Admin-Setup.exe"
+          if (-not (Test-Path $file)) { throw "Admin installer was not generated" }
+          if ((Get-Item $file).Length -lt 1000000) { throw "Admin installer is unexpectedly small" }
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SocialBIRD-Admin-Windows
+          path: admin-desktop/dist/SocialBIRD-Admin-Setup.exe
+          if-no-files-found: error
+
+      - name: Publish stable admin-desktop-latest release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: .
+        run: |
+          if gh release view admin-desktop-latest >/dev/null 2>&1; then
+            gh release upload admin-desktop-latest admin-desktop/dist/SocialBIRD-Admin-Setup.exe --clobber
+          else
+            gh release create admin-desktop-latest admin-desktop/dist/SocialBIRD-Admin-Setup.exe \
+              --title "SocialBIRD Admin Desktop" \
+              --notes "Отдельная Electron.js админ-панель SocialBIRD с email 2FA, управлением пользователями, системной статистикой и аудитом действий." \
+              --prerelease
+          fi
