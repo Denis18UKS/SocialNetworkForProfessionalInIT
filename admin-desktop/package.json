@@ -1,0 +1,46 @@
+{
+  "name": "socialbird-admin-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Secure SocialBIRD administrator desktop application",
+  "main": "main.cjs",
+  "author": "SocialBIRD",
+  "license": "UNLICENSED",
+  "scripts": {
+    "start": "electron .",
+    "dist:win": "electron-builder --win nsis",
+    "dist:linux": "electron-builder --linux AppImage"
+  },
+  "devDependencies": {
+    "electron": "^37.2.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "io.itbird.socialbird.admin",
+    "productName": "SocialBIRD Admin",
+    "asar": true,
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "renderer/**/*"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": ["nsis"],
+      "artifactName": "SocialBIRD-Admin-Setup.exe"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "linux": {
+      "target": ["AppImage"],
+      "artifactName": "SocialBIRD-Admin.AppImage",
+      "category": "Network"
+    }
+  }
+}
