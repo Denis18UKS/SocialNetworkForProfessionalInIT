@@ -15,7 +15,6 @@ import MyProfile from "./pages/MyProfile";
 import EditProfile from "./pages/EditProfile";
 import Chats from "./pages/Chats";
 import Users from "./pages/Users";
-import UserProfilePage from "./pages/UsersProfiles";
 import Xakatons from "./pages/Xakatons";
 import FriendRequests from "./pages/FriendRequests";
 import FriendQrLanding from "./pages/FriendQrLanding";
@@ -26,13 +25,23 @@ import AdminUsers from './pages/admin/AdminUsers';
 import Moderation from './pages/admin/Moderation';
 import GroupChats from './pages/GroupChats';
 import Settings from './pages/Settings';
+import EmailChange from './pages/EmailChange';
+import ChatFolders from './pages/ChatFolders';
+import CinemaParty from './pages/CinemaParty';
+import CinemaPartyRoom from './pages/CinemaPartyRoom';
+import CinemaTitle from './pages/CinemaTitle';
+import CinemaPerson from './pages/CinemaPerson';
 import OnlineCompiler from './pages/OnlineCompiler';
 import AndroidApp from './pages/AndroidApp';
 import RealtimeNotifications from './components/RealtimeNotifications';
 import PushCallRegistration from './components/PushCallRegistration';
 import NativeAppBridge from './components/NativeAppBridge';
 import SeoManager from './components/SeoManager';
+import MediaViewerHost from './components/MediaViewerHost';
+import GlobalCallOverlay from './components/GlobalCallOverlay';
+import StrictUserProfileRoute from './components/StrictUserProfileRoute';
 import { AuthProvider } from "@/pages/AuthContext";
+import './styles/chat-platform-v1.css';
 
 const queryClient = new QueryClient();
 
@@ -81,6 +90,7 @@ const AppLayout = () => {
       <NativeAppBridge />
       <RealtimeNotifications />
       <PushCallRegistration />
+      <GlobalCallOverlay />
       <SidebarProvider>
         <div className="app-visual-viewport flex w-full overflow-hidden bg-background dark:bg-gray-950">
           <AppSidebar />
@@ -99,8 +109,9 @@ const AppLayout = () => {
                 <Route path="/profile/edit" element={<EditProfile />} />
                 <Route path="/chats/:chatId" element={<Chats />} />
                 <Route path="/chats" element={<Chats />} />
+                <Route path="/chat-folders" element={<ChatFolders />} />
                 <Route path="/users" element={<Users />} />
-                <Route path="/users-profiles/:username" element={<UserProfilePage />} />
+                <Route path="/users-profiles/:username" element={<StrictUserProfileRoute />} />
                 <Route path="/xakatons" element={<Xakatons />} />
                 <Route path="/friend-requests" element={<FriendRequests />} />
                 <Route path="/friend-qr/:token" element={<FriendQrLanding />} />
@@ -110,8 +121,13 @@ const AppLayout = () => {
                 <Route path="/group-chats/:chatId" element={<GroupChats />} />
                 <Route path="/group-chats" element={<GroupChats />} />
                 <Route path="/settings" element={<Settings />} />
+                <Route path="/settings/email" element={<EmailChange />} />
                 <Route path="/compiler" element={<OnlineCompiler />} />
                 <Route path="/android-app" element={<AndroidApp />} />
+                <Route path="/c-party" element={<CinemaParty />} />
+                <Route path="/c-party/room/:roomId" element={<CinemaPartyRoom />} />
+                <Route path="/c-party/title/:titleId" element={<CinemaTitle />} />
+                <Route path="/c-party/person/:personId" element={<CinemaPerson />} />
                 <Route path="/admin/users" element={<AdminUsers />} />
                 <Route path="/admin/moderation" element={<Moderation />} />
                 <Route path="*" element={<NotFound />} />
@@ -132,6 +148,7 @@ const App = () => {
       <TooltipProvider>
         <Toaster />
         <Sonner />
+        <MediaViewerHost />
         <AuthProvider>
           <BrowserRouter>
             <AppLayout />
