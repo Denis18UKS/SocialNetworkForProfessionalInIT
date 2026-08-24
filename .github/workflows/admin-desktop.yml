@@ -60,11 +60,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         working-directory: .
         run: |
+          NOTES="SocialBIRD Admin Desktop 1.1: email 2FA, управление пользователями, модерация, аудит и C-Party Library Manager для добавления фильмов, сериалов и серий с resumable-загрузкой видео без перекодирования."
           if gh release view admin-desktop-latest >/dev/null 2>&1; then
             gh release upload admin-desktop-latest admin-desktop/dist/SocialBIRD-Admin-Setup.exe --clobber
+            gh release edit admin-desktop-latest --notes "$NOTES"
           else
             gh release create admin-desktop-latest admin-desktop/dist/SocialBIRD-Admin-Setup.exe \
               --title "SocialBIRD Admin Desktop" \
-              --notes "Отдельная Electron.js админ-панель SocialBIRD с email 2FA, управлением пользователями, системной статистикой и аудитом действий." \
+              --notes "$NOTES" \
               --prerelease
           fi
