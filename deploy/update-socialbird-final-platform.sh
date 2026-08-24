@@ -50,7 +50,9 @@ sudo -u "$APP_USER" git fetch origin +"$BRANCH:refs/remotes/origin/$BRANCH"
 sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   backend/socialbird-final-platform.js backend/strict-privacy-gate.js backend/stable-news-time.js \
   backend/cinema-qr.js backend/cinema-stream.js \
-  src/App.tsx src/components/GlobalCallOverlay.tsx src/components/StrictUserProfileRoute.tsx src/components/AppSidebar.tsx \
+  src/App.tsx src/components/VoiceCallControls.tsx src/components/GlobalCallOverlay.tsx \
+  src/components/StrictUserProfileRoute.tsx src/components/AppSidebar.tsx \
+  src/lib/call-audio-reliability.ts \
   src/pages/EmailChange.tsx src/pages/ChatFolders.tsx src/pages/CinemaParty.tsx src/pages/CinemaPartyRoom.tsx \
   src/pages/CinemaTitle.tsx src/pages/CinemaPerson.tsx src/lib/cinema-upload.ts \
   deploy/apply-global-call-overlay-v1.mjs deploy/apply-socialbird-final-runtime-v1.mjs \
@@ -61,6 +63,8 @@ for f in backend/socialbird-final-platform.js backend/strict-privacy-gate.js bac
 require_text backend/socialbird-final-platform.js "cinemaResumableUpload: true" "C-Party resumable upload"
 require_text backend/socialbird-final-platform.js "videoRecompression: false" "original video quality"
 require_text backend/strict-privacy-gate.js "profile_restricted: true" "strict profile privacy"
+require_text src/components/VoiceCallControls.tsx "CALL_RELIABILITY: persistent-audio-and-health" "canonical v4 call reliability source"
+require_text src/components/VoiceCallControls.tsx "APP_FIX: removable-screen-track" "canonical v4 screen sharing source"
 
 echo "[3/10] Applying final wiring"
 sudo -u "$APP_USER" node deploy/apply-global-call-overlay-v1.mjs
