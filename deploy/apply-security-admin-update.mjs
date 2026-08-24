@@ -35,4 +35,17 @@ for (const expected of [
 }
 
 fs.writeFileSync(serverPath, source, 'utf8');
+
+const installPath = path.join(root, 'deploy/install.sh');
+if (fs.existsSync(installPath)) {
+  let install = fs.readFileSync(installPath, 'utf8');
+  const applyCall = 'sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/apply-security-admin-update.mjs"';
+  const hardenCall = 'sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/harden-source.mjs"';
+  if (!install.includes(applyCall)) {
+    if (!install.includes(hardenCall)) throw new Error('Security/admin patch failed: installer harden marker not found');
+    install = install.replace(hardenCall, `${applyCall}\n${hardenCall}`);
+    fs.writeFileSync(installPath, install, 'utf8');
+  }
+}
+
 console.log('SocialBIRD registration verification, Admin Desktop API and Android version API wiring is current.');
