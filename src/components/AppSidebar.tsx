@@ -1,7 +1,9 @@
 import {
   Award,
   Ban,
+  Clapperboard,
   Code2,
+  Folder,
   Home,
   LogOut,
   MessageCircle,
@@ -125,6 +127,8 @@ export function AppSidebar() {
     { title: t("myProfile"), url: "/profile", icon: User },
     { title: t("chats"), url: "/chats", icon: MessageSquare },
     { title: t("groupChats"), url: "/group-chats", icon: MessagesSquare },
+    { title: language === "ru" ? "Папки чатов" : "Chat folders", url: "/chat-folders", icon: Folder },
+    { title: "C-Party", url: "/c-party", icon: Clapperboard },
     { title: t("users"), url: "/users", icon: Users },
     { title: t("friendRequests"), url: "/friend-requests", icon: UserPlus },
     { title: t("blacklist"), url: "/blacklist", icon: Ban },
