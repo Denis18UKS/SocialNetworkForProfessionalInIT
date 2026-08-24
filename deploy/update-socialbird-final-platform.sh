@@ -16,6 +16,7 @@ mkdir -p "$BACKUP_DIR"
 BACKUP_FILES=(
   backend/server.js backend/server.production.js
   src/App.tsx src/components/VoiceCallControls.tsx src/components/AppSidebar.tsx
+  src/lib/call-audio-reliability.ts
   src/pages/GroupChats.tsx src/pages/Users.tsx src/pages/Settings.tsx
   src/pages/CinemaPartyRoom.tsx src/styles/chat-platform-v1.css
 )
