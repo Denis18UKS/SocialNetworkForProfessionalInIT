@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('socialBirdAdmin', Object.freeze({
   setPostStatus: (payload) => ipcRenderer.invoke('admin:set-post-status', payload),
   deletePost: (payload) => ipcRenderer.invoke('admin:delete-post', payload),
   setBlocked: (payload) => ipcRenderer.invoke('admin:block-user', payload),
+  deleteUser: (payload) => ipcRenderer.invoke('admin:delete-user', payload),
   setRole: (payload) => ipcRenderer.invoke('admin:set-role', payload),
   logout: () => ipcRenderer.invoke('admin:logout'),
   openSite: () => ipcRenderer.invoke('admin:open-site'),
