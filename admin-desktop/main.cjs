@@ -107,7 +107,10 @@ ipcMain.handle('admin:confirm-code', async (_event, payload) => {
 });
 
 ipcMain.handle('admin:stats', () => request('/admin/desktop/stats', { token: requireDesktopSession() }));
-ipcMain.handle('admin:users', (_event, query) => request(`/admin/desktop/users?q=${encodeURIComponent(String(query || ''))}&limit=200`, { token: requireDesktopSession() }));
+ipcMain.handle('admin:users', async (_event, query) => {
+  const users = await request(`/admin/v2/users?search=${encodeURIComponent(String(query || ''))}`, { token: requireDesktopSession() });
+  return { users: Array.isArray(users) ? users : [] };
+});
 ipcMain.handle('admin:audit', () => request('/admin/desktop/audit?limit=120', { token: requireDesktopSession() }));
 ipcMain.handle('admin:posts', () => request('/admin/posts', { token: requireDesktopSession() }));
 ipcMain.handle('admin:set-post-status', (_event, payload) => request(`/admin/posts/${Number(payload?.id)}/status`, {
@@ -119,13 +122,15 @@ ipcMain.handle('admin:delete-post', (_event, payload) => request(`/admin/posts/$
   method: 'DELETE',
   token: requireDesktopSession(),
 }));
-ipcMain.handle('admin:block-user', (_event, payload) => request(`/admin/desktop/users/${Number(payload?.id)}/block`, {
-  method: 'PATCH',
+ipcMain.handle('admin:block-user', (_event, payload) => request(`/admin/v2/users/${Number(payload?.id)}/block`, {
+  method: payload?.blocked ? 'POST' : 'DELETE',
   token: requireDesktopSession(),
-  body: {
-    blocked: Boolean(payload?.blocked),
-    reason: String(payload?.reason || '').slice(0, 500),
-  },
+  body: payload?.blocked ? { reason: String(payload?.reason || '').slice(0, 500) } : undefined,
+}));
+ipcMain.handle('admin:delete-user', (_event, payload) => request(`/admin/v2/users/${Number(payload?.id)}`, {
+  method: 'DELETE',
+  token: requireDesktopSession(),
+  body: { reason: String(payload?.reason || 'Удалено администратором').slice(0, 500) },
 }));
 ipcMain.handle('admin:set-role', (_event, payload) => request(`/admin/desktop/users/${Number(payload?.id)}/role`, {
   method: 'PATCH',
