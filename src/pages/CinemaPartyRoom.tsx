@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { Copy, Maximize2, MessageCircle, Pause, Play, QrCode, Send, Square, Users, Volume2, VolumeX } from "lucide-react";
+import { Copy, Maximize2, MessageCircle, Play, QrCode, Send, Square, Users, Volume2, VolumeX } from "lucide-react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -30,12 +30,16 @@ const CPARTY_VOLUME_KEY = "socialbird:cparty-volume";
 
 const readSavedVolume = () => {
   try {
-    const value = Number(localStorage.getItem(CPARTY_VOLUME_KEY));
+    const raw = localStorage.getItem(CPARTY_VOLUME_KEY);
+    if (raw === null || raw.trim() === "") return 1;
+    const value = Number(raw);
     return Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 1;
   } catch {
     return 1;
   }
 };
+
+const isNativeAndroidClient = () => typeof navigator !== "undefined" && /SocialBIRDAndroid\//i.test(navigator.userAgent || "");
 
 const CinemaPartyRoom = () => {
   const { roomId = "" } = useParams<{ roomId: string }>();
@@ -50,6 +54,7 @@ const CinemaPartyRoom = () => {
   const lastMessageRef = useRef(0);
   const initialVolumeRef = useRef(readSavedVolume());
   const lastAudibleVolumeRef = useRef(initialVolumeRef.current > 0.001 ? initialVolumeRef.current : 1);
+  const nativeAndroidRef = useRef(isNativeAndroidClient());
   const [room, setRoom] = useState<Room | null>(null);
   const [episodes, setEpisodes] = useState<Episode[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -62,6 +67,7 @@ const CinemaPartyRoom = () => {
   const invite = room?.invite_token || inviteFromUrl;
   const roomUrl = useMemo(() => `${window.location.origin}/c-party/room/${roomId}${invite ? `?invite=${encodeURIComponent(invite)}` : ""}`, [roomId, invite]);
   const streamUrl = useMemo(() => `${api}/cinema/stream/${roomId}${invite ? `?invite=${encodeURIComponent(invite)}` : ""}`, [roomId, invite]);
+  const useDedicatedOwnerAudio = Boolean(room?.is_owner && nativeAndroidRef.current);
 
   const loadRoom = async () => {
     const response = await fetch(`${api}/cinema/rooms/${roomId}${inviteFromUrl ? `?invite=${encodeURIComponent(inviteFromUrl)}` : ""}`, { headers });
@@ -109,43 +115,64 @@ const CinemaPartyRoom = () => {
     return () => window.clearInterval(timer);
   }, [room?.is_owner, roomId, invite]);
 
+  const persistVolume = (value: number) => {
+    try { localStorage.setItem(CPARTY_VOLUME_KEY, String(value)); } catch {}
+  };
+
+  const applyVolumeToMedia = (value: number) => {
+    const normalized = Math.min(1, Math.max(0, value));
+    const video = videoRef.current;
+    const audio = ownerAudioRef.current;
+
+    if (video) {
+      video.volume = normalized;
+      // SOCIALBIRD_CPARTY_OWNER_AUDIO_V2: dedicated-audio-channel
+      // Desktop uses the VIDEO audio directly. Only native Android owner uses the hidden AUDIO fallback.
+      video.muted = useDedicatedOwnerAudio || normalized <= 0.001;
+      video.defaultMuted = useDedicatedOwnerAudio;
+    }
+
+    if (audio) {
+      audio.volume = normalized;
+      audio.muted = normalized <= 0.001;
+    }
+  };
+
+  // SOCIALBIRD_CPARTY_VOLUME_V2: direct-media-volume
+  useEffect(() => {
+    const normalized = Math.min(1, Math.max(0, playerVolume));
+    persistVolume(normalized);
+    if (normalized > 0.001) lastAudibleVolumeRef.current = normalized;
+    applyVolumeToMedia(normalized);
+  }, [playerVolume, useDedicatedOwnerAudio]);
+
   const syncOwnerAudio = () => {
-    if (!room?.is_owner) return null;
+    if (!useDedicatedOwnerAudio) return null;
     const video = videoRef.current;
     const audio = ownerAudioRef.current;
     if (!video || !audio) return null;
-
     const desiredSrc = video.currentSrc || video.src || streamUrl;
     if (desiredSrc && audio.src !== desiredSrc) {
       audio.src = desiredSrc;
       audio.load();
     }
-
     audio.volume = playerVolume;
     audio.muted = playerVolume <= 0.001;
-    if (Number.isFinite(video.currentTime)) {
+    if (Number.isFinite(video.currentTime) && Math.abs(audio.currentTime - video.currentTime) > 0.25) {
       try { audio.currentTime = video.currentTime; } catch {}
     }
     return audio;
   };
 
-  // SOCIALBIRD_CPARTY_OWNER_AUDIO_V2: dedicated-audio-channel
   useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-
-    if (!room?.is_owner) {
-      video.muted = playerVolume <= 0.001;
-      video.volume = playerVolume;
+    if (!useDedicatedOwnerAudio) {
       setOwnerAudioMuted(false);
+      ownerAudioRef.current?.pause();
       return;
     }
-
-    // The owner hears the dedicated audio element. Keep video itself muted to avoid double audio.
-    video.defaultMuted = true;
-    video.muted = true;
-    const audio = syncOwnerAudio();
-    if (!audio) return;
+    const video = videoRef.current;
+    const audio = ownerAudioRef.current;
+    if (!video || !audio) return;
 
     const syncPosition = () => {
       if (!Number.isFinite(video.currentTime)) return;
@@ -153,59 +180,24 @@ const CinemaPartyRoom = () => {
         try { audio.currentTime = video.currentTime; } catch {}
       }
     };
-    const reflectAudio = () => {
-      const intentionallyMuted = playerVolume <= 0.001;
-      setOwnerAudioMuted(!intentionallyMuted && (audio.muted || audio.paused));
-    };
+    const reflectAudio = () => setOwnerAudioMuted(playerVolume > 0.001 && (audio.muted || audio.paused));
 
+    applyVolumeToMedia(playerVolume);
     syncPosition();
     reflectAudio();
     audio.addEventListener("playing", reflectAudio);
     audio.addEventListener("pause", reflectAudio);
     audio.addEventListener("volumechange", reflectAudio);
-    audio.addEventListener("loadedmetadata", syncPosition);
     const timer = window.setInterval(() => {
       if (!video.paused && !audio.paused) syncPosition();
     }, 500);
-
     return () => {
       window.clearInterval(timer);
-      audio.pause();
       audio.removeEventListener("playing", reflectAudio);
       audio.removeEventListener("pause", reflectAudio);
       audio.removeEventListener("volumechange", reflectAudio);
-      audio.removeEventListener("loadedmetadata", syncPosition);
     };
-  }, [room?.is_owner, streamUrl]);
-
-  // SOCIALBIRD_CPARTY_VOLUME_V1: pc-slider
-  useEffect(() => {
-    const normalized = Math.min(1, Math.max(0, playerVolume));
-    try { localStorage.setItem(CPARTY_VOLUME_KEY, String(normalized)); } catch {}
-    if (normalized > 0.001) lastAudibleVolumeRef.current = normalized;
-
-    const video = videoRef.current;
-    if (video) {
-      if (room?.is_owner) {
-        video.defaultMuted = true;
-        video.muted = true;
-      } else {
-        video.volume = normalized;
-        video.muted = normalized <= 0.001;
-      }
-    }
-
-    const audio = ownerAudioRef.current;
-    if (room?.is_owner && audio) {
-      audio.volume = normalized;
-      audio.muted = normalized <= 0.001;
-      if (normalized <= 0.001) {
-        setOwnerAudioMuted(false);
-      } else if (video && !video.paused && audio.paused) {
-        void audio.play().then(() => setOwnerAudioMuted(false)).catch(() => setOwnerAudioMuted(true));
-      }
-    }
-  }, [playerVolume, room?.is_owner]);
+  }, [useDedicatedOwnerAudio, streamUrl]);
 
   useEffect(() => {
     if (!room?.chat_enabled) return;
@@ -250,12 +242,16 @@ const CinemaPartyRoom = () => {
   };
 
   const enableOwnerAudio = async () => {
-    if (!room?.is_owner) return;
-    if (playerVolume <= 0.001) setPlayerVolume(lastAudibleVolumeRef.current || 1);
+    if (!useDedicatedOwnerAudio) return;
+    const nextVolume = playerVolume <= 0.001 ? (lastAudibleVolumeRef.current || 1) : playerVolume;
+    if (playerVolume <= 0.001) {
+      setPlayerVolume(nextVolume);
+      persistVolume(nextVolume);
+    }
     const audio = syncOwnerAudio();
     if (!audio) return;
+    audio.volume = nextVolume;
     audio.muted = false;
-    audio.volume = Math.max(playerVolume, lastAudibleVolumeRef.current || 1);
     try {
       await audio.play();
       setOwnerAudioMuted(false);
@@ -264,29 +260,56 @@ const CinemaPartyRoom = () => {
     }
   };
 
-  const handleOwnerPlay = () => {
-    if (room?.is_owner) {
-      const audio = syncOwnerAudio();
-      if (audio && playerVolume > 0.001) {
-        void audio.play().then(() => setOwnerAudioMuted(false)).catch(() => setOwnerAudioMuted(true));
-      }
+  const handleVideoPlay = () => {
+    const video = videoRef.current;
+    if (video && !useDedicatedOwnerAudio) {
+      video.volume = playerVolume;
+      video.muted = playerVolume <= 0.001;
+    }
+    if (useDedicatedOwnerAudio && playerVolume > 0.001) {
+      void enableOwnerAudio();
     }
     void updateState("playing");
   };
 
   const handleVideoPause = () => {
-    if (room?.is_owner) ownerAudioRef.current?.pause();
+    if (useDedicatedOwnerAudio) ownerAudioRef.current?.pause();
     void updateState("paused");
   };
 
   const handleVideoSeeked = () => {
-    if (room?.is_owner) syncOwnerAudio();
+    if (useDedicatedOwnerAudio) {
+      const audio = syncOwnerAudio();
+      if (audio && videoRef.current && !videoRef.current.paused && playerVolume > 0.001) {
+        void audio.play().then(() => setOwnerAudioMuted(false)).catch(() => setOwnerAudioMuted(true));
+      }
+    }
     void updateState(videoRef.current?.paused ? "paused" : "playing");
+  };
+
+  const handleNativeVideoVolume = () => {
+    if (useDedicatedOwnerAudio) return;
+    const video = videoRef.current;
+    if (!video) return;
+    const normalized = video.muted ? 0 : Math.min(1, Math.max(0, video.volume));
+    if (Math.abs(normalized - playerVolume) < 0.005) return;
+    if (normalized > 0.001) lastAudibleVolumeRef.current = normalized;
+    setPlayerVolume(normalized);
+    persistVolume(normalized);
   };
 
   const changeVolume = (value: number) => {
     const normalized = Math.min(1, Math.max(0, value));
+    if (normalized > 0.001) lastAudibleVolumeRef.current = normalized;
+    // Apply immediately so PC volume changes while the thumb is moving, without waiting for React render.
+    applyVolumeToMedia(normalized);
     setPlayerVolume(normalized);
+    persistVolume(normalized);
+
+    if (useDedicatedOwnerAudio && normalized > 0.001 && videoRef.current && !videoRef.current.paused) {
+      const audio = syncOwnerAudio();
+      if (audio) void audio.play().then(() => setOwnerAudioMuted(false)).catch(() => setOwnerAudioMuted(true));
+    }
   };
 
   const toggleMute = () => {
@@ -368,12 +391,13 @@ const CinemaPartyRoom = () => {
                 playsInline
                 preload="metadata"
                 className="mx-auto max-h-[74dvh] min-h-[240px] w-full bg-black object-contain"
-                onPlay={handleOwnerPlay}
+                onPlay={handleVideoPlay}
                 onPause={handleVideoPause}
                 onSeeked={handleVideoSeeked}
+                onVolumeChange={handleNativeVideoVolume}
               />
-              {room.is_owner && <audio ref={ownerAudioRef} src={streamUrl} preload="auto" className="hidden" />}
-              {room.is_owner && ownerAudioMuted && playerVolume > 0.001 && (
+              {useDedicatedOwnerAudio && <audio ref={ownerAudioRef} src={streamUrl} preload="auto" className="hidden" />}
+              {useDedicatedOwnerAudio && ownerAudioMuted && playerVolume > 0.001 && (
                 <button
                   type="button"
                   onClick={() => void enableOwnerAudio()}
@@ -386,12 +410,13 @@ const CinemaPartyRoom = () => {
               <button type="button" onClick={openFullscreen} className="absolute bottom-3 right-3 rounded-lg bg-black/70 p-2 text-white hover:bg-black/90" title="На весь экран"><Maximize2 className="h-5 w-5" /></button>
               {!room.is_owner && <div className="pointer-events-none absolute left-3 top-3 rounded-lg bg-black/70 px-2.5 py-1 text-xs">Плеером управляет создатель комнаты</div>}
             </div>
+
             <div className="flex flex-wrap items-center gap-3 border-t border-white/10 p-3 text-xs text-white/70">
               <div className="flex min-w-0 flex-1 items-center gap-2">
                 {room.is_owner ? <><Play className="h-3.5 w-3.5 shrink-0" /><span>Play / Pause / перемотка синхронизируются у всех участников</span></> : <><Users className="h-3.5 w-3.5 shrink-0" /><span>Позиция автоматически синхронизируется с создателем</span></>}
               </div>
 
-              <div className="flex min-w-[230px] items-center gap-2 rounded-lg bg-white/10 px-2.5 py-2 text-white" title={`Громкость ${Math.round(playerVolume * 100)}%`}>
+              <div className="flex min-w-[250px] items-center gap-2 rounded-lg bg-white/10 px-3 py-2 text-white" title={`Громкость ${Math.round(playerVolume * 100)}%`}>
                 <button type="button" onClick={toggleMute} className="rounded p-1 hover:bg-white/10" aria-label={playerVolume > 0.001 ? "Выключить звук" : "Включить звук"}>
                   {playerVolume > 0.001 ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
                 </button>
@@ -401,11 +426,12 @@ const CinemaPartyRoom = () => {
                   max="100"
                   step="1"
                   value={Math.round(playerVolume * 100)}
-                  onChange={(event) => changeVolume(Number(event.target.value) / 100)}
-                  className="h-2 w-36 cursor-pointer accent-white sm:w-44"
+                  onInput={(event) => changeVolume(Number(event.currentTarget.value) / 100)}
+                  onChange={(event) => changeVolume(Number(event.currentTarget.value) / 100)}
+                  className="h-2 w-40 cursor-pointer accent-white sm:w-52"
                   aria-label="Громкость C-Party"
                 />
-                <span className="w-10 text-right font-medium tabular-nums">{Math.round(playerVolume * 100)}%</span>
+                <span className="w-11 text-right font-medium tabular-nums">{Math.round(playerVolume * 100)}%</span>
               </div>
             </div>
           </CardContent>
