@@ -13,7 +13,8 @@ trap 'rm -f "$TMP" "$TMP2"' EXIT
 cd "$APP_DIR"
 [[ -f "$SOURCE" ]] || { echo "Missing $SOURCE" >&2; exit 1; }
 
-# Ensure deploy-time patchers and canonical files are current.
+# Only patchers/workers are refreshed before the generated deployment starts.
+# Application/offline files are refreshed after the normal backup is created.
 sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   deploy/apply-cinema-unrestricted-storage.mjs \
   deploy/apply-cinema-format-normalization-v1.mjs \
@@ -22,8 +23,6 @@ sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   deploy/apply-cparty-session-media-change-v1.mjs \
   deploy/apply-cparty-participant-media-reload-v2.mjs \
   deploy/apply-global-call-overlay-v3.mjs \
-  src/components/RealtimeNotifications.tsx \
-  src/main.tsx src/lib/offline.ts public/sw.js public/manifest.webmanifest \
   backend/cinema-transcode-worker.js
 node --check deploy/apply-cinema-unrestricted-storage.mjs
 node --check deploy/apply-cinema-format-normalization-v1.mjs
@@ -32,15 +31,9 @@ node --check deploy/apply-cinema-upload-compat-v1.mjs
 node --check deploy/apply-cparty-session-media-change-v1.mjs
 node --check deploy/apply-cparty-participant-media-reload-v2.mjs
 node --check deploy/apply-global-call-overlay-v3.mjs
-node --check public/sw.js
 node --check backend/cinema-transcode-worker.js
-grep -Fq 'SOCIALBIRD_OFFLINE_V1: client-bootstrap' src/lib/offline.ts
-grep -Fq 'installOfflineSupport();' src/main.tsx
-grep -Fq 'SOCIALBIRD_OFFLINE_V1: shell-and-private-api-cache' public/sw.js
 
-# SOCIALBIRD_UNRESTRICTED_DEPLOY_V7
-# Remove only the artificial pre-deploy free-space gate. All normal build,
-# verification, rollback, nginx, PM2 and smoke-test checks stay enabled.
+# SOCIALBIRD_UNRESTRICTED_DEPLOY_V8
 awk '
 BEGIN { skipping=0 }
 /^MIN_FREE_KB=/ { next }
@@ -50,10 +43,18 @@ skipping { next }
 { print }
 ' "$SOURCE" > "$TMP"
 
-# Extend the normal updater without modifying its safety/rollback behavior.
 awk '
+/^BACKUP_FILES=\(/ {
+  print
+  print "  src/main.tsx public/sw.js public/manifest.webmanifest"
+  next
+}
 /^echo "\[2\/10\] Checking modules"/ {
   print "sudo -u \"$APP_USER\" git checkout \"origin/$BRANCH\" -- src/components/RealtimeNotifications.tsx src/main.tsx src/lib/offline.ts public/sw.js public/manifest.webmanifest"
+  print "grep -Fq \"SOCIALBIRD_OFFLINE_V1: client-bootstrap\" src/lib/offline.ts"
+  print "grep -Fq \"installOfflineSupport();\" src/main.tsx"
+  print "grep -Fq \"SOCIALBIRD_OFFLINE_V1: shell-and-private-api-cache\" public/sw.js"
+  print "node --check public/sw.js"
   print "if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then"
   print "  export DEBIAN_FRONTEND=noninteractive"
   print "  apt-get update -qq"
@@ -67,7 +68,6 @@ awk '
   print "sudo -u \"$APP_USER\" node deploy/apply-cinema-unrestricted-storage.mjs"
   print "node --check backend/admin-cinema-library.js"
   print "node --check backend/cinema-transcode-worker.js"
-  print "node --check public/sw.js"
 }
 /sudo -u "\$APP_USER" node deploy\/apply-global-call-overlay-v1\.mjs/ {
   print "sudo -u \"$APP_USER\" node deploy/apply-global-call-overlay-v3.mjs"
