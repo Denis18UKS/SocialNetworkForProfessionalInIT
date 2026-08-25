@@ -4,11 +4,15 @@ const fs = require('fs');
 const crypto = require('crypto');
 
 const API_BASE = String(process.env.SOCIALBIRD_ADMIN_API_URL || 'https://api.socialbird.ru').replace(/\/$/, '');
+const CINEMA_UPLOAD_CONCURRENCY = 4;
+const CINEMA_UPLOAD_RETRIES = 3;
 let loginToken = '';
 let desktopToken = '';
 let desktopTokenExpiresAt = 0;
 let cinemaWindow = null;
 const pickedCinemaFiles = new Map();
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const request = async (route, options = {}) => {
   const controller = new AbortController();
@@ -267,28 +271,55 @@ ipcMain.handle('admin:cinema-upload-video', async (event, fileId) => {
   const chunkSize = Number(started.chunkSize || 8 * 1024 * 1024);
   const totalChunks = Number(started.totalChunks || Math.ceil(record.size / chunkSize));
   const file = await fs.promises.open(record.path, 'r');
+  let nextIndex = 0;
   let loaded = 0;
-  try {
-    for (let index = 0; index < totalChunks; index += 1) {
-      requireDesktopSession();
-      const remaining = record.size - loaded;
-      const length = Math.min(chunkSize, remaining);
-      const buffer = Buffer.allocUnsafe(length);
-      const { bytesRead } = await file.read(buffer, 0, length, loaded);
-      if (bytesRead !== length) throw new Error('Не удалось прочитать очередную часть видео.');
-      await requestBinary(`/admin/desktop/cinema/uploads/${encodeURIComponent(started.uploadId)}/chunks/${index}`, buffer, token);
-      loaded += bytesRead;
-      event.sender.send('admin:cinema-upload-progress', {
-        fileId: String(fileId),
-        name: record.name,
-        loaded,
-        total: record.size,
-        percent: Math.min(100, Math.round((loaded / record.size) * 100)),
-      });
+
+  const uploadIndex = async (index) => {
+    requireDesktopSession();
+    const start = index * chunkSize;
+    const length = Math.min(chunkSize, record.size - start);
+    const buffer = Buffer.allocUnsafe(length);
+    const { bytesRead } = await file.read(buffer, 0, length, start);
+    if (bytesRead !== length) throw new Error(`Не удалось прочитать часть ${index + 1} видео.`);
+
+    let lastError = null;
+    for (let attempt = 1; attempt <= CINEMA_UPLOAD_RETRIES; attempt += 1) {
+      try {
+        requireDesktopSession();
+        await requestBinary(`/admin/desktop/cinema/uploads/${encodeURIComponent(started.uploadId)}/chunks/${index}`, buffer, token);
+        loaded += bytesRead;
+        event.sender.send('admin:cinema-upload-progress', {
+          fileId: String(fileId),
+          name: record.name,
+          loaded,
+          total: record.size,
+          percent: Math.min(95, Math.max(1, Math.round((loaded / record.size) * 95))),
+        });
+        return;
+      } catch (error) {
+        lastError = error;
+        if (attempt < CINEMA_UPLOAD_RETRIES) await sleep(350 * attempt);
+      }
     }
+    throw lastError || new Error(`Не удалось загрузить часть ${index + 1}.`);
+  };
+
+  const worker = async () => {
+    while (true) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= totalChunks) return;
+      await uploadIndex(index);
+    }
+  };
+
+  try {
+    const concurrency = Math.max(1, Math.min(CINEMA_UPLOAD_CONCURRENCY, totalChunks));
+    await Promise.all(Array.from({ length: concurrency }, () => worker()));
   } finally {
     await file.close();
   }
+
   const completed = await request(`/admin/desktop/cinema/uploads/${encodeURIComponent(started.uploadId)}/complete`, {
     method: 'POST', token, timeoutMs: 120000, body: {},
   });
