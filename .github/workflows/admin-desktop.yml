@@ -10,6 +10,7 @@ on:
       - "backend/cinema-transcode-worker.js"
       - "deploy/apply-cinema-format-normalization-v1.mjs"
       - "deploy/apply-cinema-existing-normalize-v1.mjs"
+      - "deploy/apply-cinema-desktop-format-v1.mjs"
       - ".github/workflows/admin-desktop.yml"
 
 permissions:
@@ -40,9 +41,9 @@ jobs:
         run: |
           node --check deploy/apply-cinema-format-normalization-v1.mjs
           node --check deploy/apply-cinema-existing-normalize-v1.mjs
+          node --check deploy/apply-cinema-desktop-format-v1.mjs
           node --check backend/cinema-transcode-worker.js
-          node deploy/apply-cinema-format-normalization-v1.mjs
-          node deploy/apply-cinema-existing-normalize-v1.mjs
+          node deploy/apply-cinema-desktop-format-v1.mjs
 
       - name: Validate JavaScript syntax
         run: |
