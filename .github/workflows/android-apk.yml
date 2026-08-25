@@ -97,20 +97,15 @@ jobs:
           path: ~/.android/debug.keystore
           key: socialbird-android-sideload-key-v1
 
-      - name: Ensure sideload signing key exists
+      - name: Require the existing stable sideload signing key
         run: |
           mkdir -p ~/.android
           if [ ! -f ~/.android/debug.keystore ]; then
-            keytool -genkeypair \
-              -keystore ~/.android/debug.keystore \
-              -storepass android \
-              -alias androiddebugkey \
-              -keypass android \
-              -dname "CN=SocialBIRD Android Sideload,O=IT-BIRD,C=RU" \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000
+            echo "Stable SocialBIRD Android signing key is missing. Refusing to rotate it automatically because a new key would make in-place updates fail." >&2
+            exit 3
           fi
+          keytool -list -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey >/dev/null
+          echo "Stable sideload signing key is present."
 
       - name: Build installable APK
         env:
