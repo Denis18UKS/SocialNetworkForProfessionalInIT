@@ -13,11 +13,16 @@ trap 'rm -f "$TMP" "$TMP2"' EXIT
 cd "$APP_DIR"
 [[ -f "$SOURCE" ]] || { echo "Missing $SOURCE" >&2; exit 1; }
 
-# Ensure the unrestricted storage patcher itself is current.
-sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- deploy/apply-cinema-unrestricted-storage.mjs
+# Ensure deploy-time C-Party patchers and the detached transcoding worker are current.
+sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
+  deploy/apply-cinema-unrestricted-storage.mjs \
+  deploy/apply-cinema-format-normalization-v1.mjs \
+  backend/cinema-transcode-worker.js
 node --check deploy/apply-cinema-unrestricted-storage.mjs
+node --check deploy/apply-cinema-format-normalization-v1.mjs
+node --check backend/cinema-transcode-worker.js
 
-# SOCIALBIRD_UNRESTRICTED_DEPLOY_V2
+# SOCIALBIRD_UNRESTRICTED_DEPLOY_V3
 # Remove only the artificial pre-deploy free-space gate. All normal build,
 # verification, rollback, nginx, PM2 and smoke-test checks stay enabled.
 awk '
@@ -29,11 +34,24 @@ skipping { next }
 { print }
 ' "$SOURCE" > "$TMP"
 
-# After the updater refreshes the backend sources from GitHub, relax C-Party
-# upload size/reserve defaults before syntax and feature verification.
+# After the updater refreshes the canonical backend sources from GitHub:
+# 1) ensure FFmpeg/FFprobe exist,
+# 2) add automatic browser-compatible media normalization,
+# 3) keep the user's unrestricted upload/storage defaults,
+# 4) syntax-check the resulting backend before later build/restart stages.
 awk '
 /^echo "\[2\/10\] Checking modules"/ {
+  print "if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then"
+  print "  export DEBIAN_FRONTEND=noninteractive"
+  print "  apt-get update -qq"
+  print "  apt-get install -y ffmpeg"
+  print "fi"
+  print "ffmpeg -version | head -n 1"
+  print "ffprobe -version | head -n 1"
+  print "sudo -u \"$APP_USER\" node deploy/apply-cinema-format-normalization-v1.mjs"
   print "sudo -u \"$APP_USER\" node deploy/apply-cinema-unrestricted-storage.mjs"
+  print "node --check backend/admin-cinema-library.js"
+  print "node --check backend/cinema-transcode-worker.js"
 }
 { print }
 ' "$TMP" > "$TMP2"
@@ -43,5 +61,6 @@ bash -n "$TMP2"
 
 echo "Artificial disk preflight limit disabled."
 echo "C-Party upload size/reserve limits disabled by default."
+echo "C-Party browser video normalization enabled (FFmpeg/FFprobe)."
 df -h "$APP_DIR" || true
 exec bash "$TMP2"
