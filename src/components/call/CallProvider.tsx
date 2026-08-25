@@ -1001,7 +1001,7 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
 
     const socket = createReconnectingWebSocket(getWsUrl());
     socketRef.current = socket;
-    socket.onopen = () => socket.send(JSON.stringify({ type: "AUTH", token }));
+    socket.onopen = () => socket.send(JSON.stringify({ type: "AUTH", token, clientRole: "call-host" }));
     socket.onmessage = (event) => {
       try {
         const payload = JSON.parse(event.data);
@@ -1047,6 +1047,22 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
       navigator.serviceWorker?.removeEventListener?.("message", onServiceWorkerMessage);
     };
   }, [acceptIncoming, declineIncoming]);
+
+  // SOCIALBIRD_CALL_SYSTEM_V4: legacy-native-answer-event
+  useEffect(() => {
+    const acceptFromNativeRuntime = () => {
+      autoAnswerRef.current = true;
+      try { sessionStorage.removeItem("itbird-native-answer-call"); } catch {}
+      if (incomingRef.current) void acceptIncoming();
+    };
+
+    let pending = false;
+    try { pending = sessionStorage.getItem("itbird-native-answer-call") === "1"; } catch {}
+    if (pending) acceptFromNativeRuntime();
+
+    window.addEventListener("itbird-native-answer-call", acceptFromNativeRuntime);
+    return () => window.removeEventListener("itbird-native-answer-call", acceptFromNativeRuntime);
+  }, [acceptIncoming]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {

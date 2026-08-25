@@ -9,6 +9,7 @@ import { AlertCircle, CheckCircle2 } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import { useAuth } from "@/pages/AuthContext";
 import { motion } from "framer-motion";
+import PasswordRecovery from "@/components/PasswordRecovery";
 
 const ITBirdRules = () => (
   <div className="space-y-4 text-sm max-h-64 overflow-y-auto pr-2 text-gray-700 dark:text-gray-200">
@@ -316,32 +317,9 @@ const Login = () => {
               </Button>
 
               {showPasswordReset && (
-                <form onSubmit={handlePasswordReset} className="mb-4 space-y-3 rounded-md border border-gray-200 dark:border-gray-700 p-3 text-left">
-                  <div className="space-y-2">
-                    <Label htmlFor="resetEmail" className="text-gray-700 dark:text-gray-300">
-                      Почта аккаунта
-                    </Label>
-                    <Input
-                      id="resetEmail"
-                      type="email"
-                      value={resetEmail}
-                      onChange={(e) => setResetEmail(e.target.value)}
-                      placeholder="example@mail.com"
-                      required
-                      className="border-gray-300 dark:border-gray-700 focus:ring-2 focus:ring-[#6E59A5]"
-                    />
-                  </div>
-                  <p className="text-xs text-gray-500 dark:text-gray-400">
-                    На почту придет временный пароль из 6 цифр. Используйте его для входа.
-                  </p>
-                  <Button
-                    type="submit"
-                    className="w-full bg-[#6E59A5] hover:bg-[#5a4a8a] text-white"
-                    disabled={isResetLoading}
-                  >
-                    {isResetLoading ? "Отправляем..." : "Получить временный пароль"}
-                  </Button>
-                </form>
+                <div data-mail-recovery="two-step" className="MAIL_RECOVERY: two-step-ui">
+                  <PasswordRecovery />
+                </div>
               )}
 
               <Button

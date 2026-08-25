@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { apiUrl } from "@/lib/settings";
 import { useI18n } from "@/lib/i18n";
 import { useAuth } from "@/pages/AuthContext";
+import { isNativeAndroidApp } from "@/lib/screen-share";
 
 const fromBase64Url = (value: string) => {
   const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
@@ -50,6 +51,13 @@ const PushCallRegistration = () => {
   const [unsupportedIos, setUnsupportedIos] = useState(false);
 
   useEffect(() => {
+    // NATIVE_ANDROID: native-notifications-own-background
+    // The APK uses the Android foreground notification/signalling service. Registering
+    // Web Push in WebView would create duplicate call/message notifications.
+    if (isNativeAndroidApp()) {
+      setShowPrompt(false);
+      return;
+    }
     if (!isAuthenticated) {
       setShowPrompt(false);
       return;

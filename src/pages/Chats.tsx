@@ -107,6 +107,27 @@ const getSpeechRecognition = () => {
 };
 
 const MAX_CHAT_UPLOAD_BYTES = 100 * 1024 * 1024;
+const MAX_TRANSPORT_FILENAME_CHARS = 48;
+
+const makeTransportFile = (file: File) => {
+    const originalName = String(file.name || 'file');
+    if (Array.from(originalName).length <= MAX_TRANSPORT_FILENAME_CHARS) return file;
+
+    const lastDot = originalName.lastIndexOf('.');
+    const extension = lastDot > 0 && lastDot < originalName.length - 1
+        ? originalName.slice(lastDot).replace(/[^.a-zA-Z0-9_-]/g, '').slice(0, 20)
+        : '';
+    const base = lastDot > 0 ? originalName.slice(0, lastDot) : originalName;
+    const reserved = extension ? Array.from(extension).length : 0;
+    const safeBaseLength = Math.max(16, MAX_TRANSPORT_FILENAME_CHARS - reserved);
+    const shortBase = Array.from(base).slice(0, safeBaseLength).join('').trim() || 'file';
+    const transportName = `${shortBase}${extension}`;
+
+    return new File([file], transportName, {
+        type: file.type || 'application/octet-stream',
+        lastModified: file.lastModified,
+    });
+};
 
 const Chats = () => {
 
@@ -572,7 +593,8 @@ const Chats = () => {
         const formData = new FormData();
         formData.append('chatId', String(chatId));
         formData.append('message', messageText);
-        formData.append('media', file);
+        const transportFile = makeTransportFile(file);
+        formData.append('media', transportFile, transportFile.name);
 
         try {
             const response = await fetch(`http://localhost:5000/messages/upload`, {
@@ -1150,7 +1172,7 @@ const Chats = () => {
                                                     if (['mp4', 'webm', 'ogg'].includes(ext)) {
                                                         return (
                                                             <div className="mt-2">
-                                                                <video controls className="max-w-full rounded">
+                                                                <video controls preload="metadata" playsInline className="block aspect-video max-h-[60vh] w-full min-w-0 max-w-full rounded bg-black object-contain">
                                                                     <source src={mediaUrl} type={`video/${ext}`} />
                                                                 </video>
                                                                 {renderDownloadLink(
@@ -1259,8 +1281,8 @@ const Chats = () => {
                             </div>
 
                             {/* Поле ввода сообщения */}
-                            <div className="mobile-bottom-safe shrink-0 border-t border-gray-200 bg-white px-2 pb-2 pt-2 dark:border-gray-700 dark:bg-gray-800 sm:p-4">
-                                <div className="mx-auto w-full min-w-0 max-w-3xl">
+                            <div className="mobile-bottom-safe w-full min-w-0 max-w-full shrink-0 overflow-hidden border-t border-gray-200 bg-white px-2 pb-2 pt-2 dark:border-gray-700 dark:bg-gray-800 sm:p-4">
+                                <div className="mx-auto w-full min-w-0 max-w-3xl overflow-hidden">
                                     {messageRestrictionText ? (
                                         <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-center text-sm font-medium text-gray-600 dark:border-gray-700 dark:bg-gray-900/60 dark:text-gray-300">
                                             {messageRestrictionText}
@@ -1328,12 +1350,12 @@ const Chats = () => {
 
                                         {/* Обработка отображения аудиофайла */}
                                         {mediaFile?.type.startsWith('audio/') && (
-                                            <div className="mt-2 flex items-center gap-2 p-2 bg-gray-100 dark:bg-gray-700 rounded-md">
+                                            <div className="mt-2 flex min-w-0 max-w-full items-center gap-2 overflow-hidden rounded-md bg-gray-100 p-2 dark:bg-gray-700">
                                                 <FileAudioIcon className="w-4 h-4 text-green-500" />
-                                                <span className="text-sm truncate flex-1">Голосовое сообщение</span>
+                                                <span className="min-w-0 flex-1 truncate text-sm">Голосовое сообщение</span>
                                                 <button
                                                     onClick={() => setMediaFile(null)}
-                                                    className="text-gray-500 hover:text-red-500"
+                                                    className="shrink-0 text-gray-500 hover:text-red-500"
                                                 >
                                                     <X className="w-4 h-4" />
                                                 </button>
@@ -1341,8 +1363,8 @@ const Chats = () => {
                                         )}
                                     </div>
 
-                                    <div className="flex items-end gap-2">
-                                        <label className="cursor-pointer p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700">
+                                    <div className="flex w-full min-w-0 max-w-full items-end gap-2 overflow-hidden">
+                                        <label className="shrink-0 cursor-pointer rounded-full p-2 hover:bg-gray-100 dark:hover:bg-gray-700">
                                             <Paperclip className="w-5 h-5 text-gray-500" />
                                             <input
                                                 type="file"
@@ -1366,7 +1388,7 @@ const Chats = () => {
                                         <Button
                                             onClick={sendMessage}
                                             size="sm"
-                                            className="bg-[#6E59A5] hover:bg-[#5a4a8a] h-10 w-10 p-0 rounded-full"
+                                            className="h-10 w-10 shrink-0 rounded-full bg-[#6E59A5] p-0 hover:bg-[#5a4a8a]"
                                             disabled={!newMessage.trim() && !mediaFile}
                                         >
                                             <SendHorizonal className="w-4 h-4" />
@@ -1374,12 +1396,12 @@ const Chats = () => {
                                     </div>
 
                                     {mediaFile && (
-                                        <div className="mt-2 flex items-center gap-2 p-2 bg-gray-100 dark:bg-gray-700 rounded-md">
+                                        <div className="mt-2 flex min-w-0 max-w-full items-center gap-2 overflow-hidden rounded-md bg-gray-100 p-2 dark:bg-gray-700">
                                             <FileIcon className="w-4 h-4 text-gray-500" />
-                                            <span className="text-sm truncate flex-1">{mediaFile.name}</span>
+                                            <span className="min-w-0 flex-1 truncate text-sm">{mediaFile.name}</span>
                                             <button
                                                 onClick={() => setMediaFile(null)}
-                                                className="text-gray-500 hover:text-red-500"
+                                                className="shrink-0 text-gray-500 hover:text-red-500"
                                             >
                                                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                                     <line x1="18" y1="6" x2="6" y2="18"></line>

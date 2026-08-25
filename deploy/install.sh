@@ -128,6 +128,21 @@ fi
 
 mysql --protocol=socket socialbird < "${APP_DIRECTORY}/deploy/schema.sql"
 
+# MAIL_RECOVERY: preserve-existing-mail-settings
+read_existing_env_value() {
+  local key="$1"
+  if [[ -f "$BACKEND_ENV" ]]; then
+    grep -m1 -E "^${key}=" "$BACKEND_ENV" | cut -d= -f2- || true
+  fi
+}
+EXISTING_SMTP_HOST="$(read_existing_env_value SMTP_HOST)"
+EXISTING_SMTP_PORT="$(read_existing_env_value SMTP_PORT)"
+EXISTING_SMTP_SECURE="$(read_existing_env_value SMTP_SECURE)"
+EXISTING_SMTP_USER="$(read_existing_env_value SMTP_USER)"
+EXISTING_SMTP_PASSWORD="$(read_existing_env_value SMTP_PASSWORD)"
+EXISTING_SMTP_FROM="$(read_existing_env_value SMTP_FROM)"
+EXISTING_OWNER_ADMIN_EMAIL="$(read_existing_env_value OWNER_ADMIN_EMAIL)"
+
 cat > "$BACKEND_ENV" <<ENV
 NODE_ENV=production
 HOST=127.0.0.1
@@ -142,18 +157,20 @@ DB_NAME=socialbird
 DB_CONNECTION_LIMIT=10
 JWT_SECRET=${JWT_SECRET}
 JWT_EXPIRES=7d
-SMTP_HOST=
-SMTP_PORT=465
-SMTP_SECURE=true
-SMTP_USER=
-SMTP_PASSWORD=
-SMTP_FROM=
+SMTP_HOST=${EXISTING_SMTP_HOST}
+SMTP_PORT=${EXISTING_SMTP_PORT:-465}
+SMTP_SECURE=${EXISTING_SMTP_SECURE:-true}
+SMTP_USER=${EXISTING_SMTP_USER}
+SMTP_PASSWORD=${EXISTING_SMTP_PASSWORD}
+SMTP_FROM=${EXISTING_SMTP_FROM}
+OWNER_ADMIN_EMAIL=${EXISTING_OWNER_ADMIN_EMAIL}
 GITHUB_PERSONAL_ACCESS_TOKEN=
 GITLAB_PERSONAL_ACCESS_TOKEN=
 MAX_UPLOAD_BYTES=104857600
 JSON_BODY_LIMIT=2mb
 WS_MAX_PAYLOAD_BYTES=1048576
 WS_HEARTBEAT_MS=30000
+FCM_SERVICE_ACCOUNT_FILE=/etc/socialbird/firebase-service-account.json
 ENABLE_COMPILER=true
 COMPILER_SOCKET=/run/socialbird-compiler/runner.sock
 COMPILER_REQUEST_TIMEOUT_MS=12000
@@ -180,6 +197,11 @@ sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/apply-mobile-call-audio-fixes.
 sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/apply-call-reliability-fixes.mjs"
 sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/apply-call-mobile-upload-fixes.mjs"
 sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/apply-call-video-mount-fix.mjs"
+sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/apply-mail-recovery-fixes.mjs"
+sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/apply-native-android-integration.mjs"
+sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/apply-chat-media-mobile-fix.mjs"
+sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/apply-chat-media-backend-fix.mjs"
+sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/apply-native-fcm-push.mjs"
 sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/harden-source.mjs"
 sudo -u "$APP_USER" node "${APP_DIRECTORY}/deploy/enable-sandbox-compiler.mjs"
 

@@ -248,6 +248,25 @@ const Index = () => {
   return (
     <div className="min-h-full bg-gray-50 px-0 py-4 dark:bg-gray-900 sm:px-2 sm:py-6 lg:px-4 lg:py-8">
       <div className="mx-auto max-w-7xl space-y-8 sm:space-y-10 lg:space-y-12">
+        {/* SEO_HOME_INTRO: visible, useful landing copy for people and search engines. */}
+        <section className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-900 sm:p-7">
+          <div className="max-w-4xl space-y-3">
+            <h1 className="text-3xl font-extrabold tracking-tight text-gray-950 dark:text-white sm:text-4xl">
+              SocialBIRD — социальная сеть для IT-специалистов
+            </h1>
+            <p className="text-base leading-7 text-gray-600 dark:text-gray-300 sm:text-lg">
+              Общайтесь с разработчиками, находите единомышленников, ведите профессиональные обсуждения,
+              используйте личные и групповые чаты, голосовые и видеозвонки, следите за IT-хакатонами и
+              запускайте код в онлайн-компиляторе SocialBIRD.
+            </p>
+            <nav aria-label="Популярные разделы SocialBIRD" className="flex flex-wrap gap-x-4 gap-y-2 text-sm font-medium">
+              <a className="text-primary hover:underline" href="/forum">Форум разработчиков</a>
+              <a className="text-primary hover:underline" href="/xakatons">IT-хакатоны</a>
+              <a className="text-primary hover:underline" href="/compiler">Онлайн-компилятор</a>
+              <a className="text-primary hover:underline" href="/android-app">Приложение для Android</a>
+            </nav>
+          </div>
+        </section>
         <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
           <div className="mb-8 flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
             <div>

@@ -78,6 +78,7 @@ const RealtimeNotifications = () => {
   const pendingOfferRef = useRef<IncomingCall | null>(null);
   const ringtoneContextRef = useRef<AudioContext | null>(null);
   const ringtoneTimerRef = useRef<number | null>(null);
+  const nativeAutoAnswerRef = useRef(false);
   const [incomingCall, setIncomingCall] = useState<IncomingCall | null>(null);
   const [activeCall, setActiveCall] = useState<IncomingCall | null>(null);
   const [offerReady, setOfferReady] = useState(false);
@@ -259,6 +260,7 @@ const RealtimeNotifications = () => {
     stopRingtone();
     setIncomingCall(null);
     setActiveCall(null);
+    window.dispatchEvent(new CustomEvent('itbird-native-call-state', { detail: { active: false } }));
     setMicEnabled(true);
     setSoundEnabled(true);
     setSoundNeedsTap(false);
@@ -548,6 +550,8 @@ const RealtimeNotifications = () => {
       // CALL_VIDEO_FIX: mount-panel-before-remote-description
       // Mount the visible call panel before setRemoteDescription can fire ontrack.
       setActiveCall(incomingCall);
+      // NATIVE_ANDROID: incoming-call-state
+      window.dispatchEvent(new CustomEvent('itbird-native-call-state', { detail: { active: true } }));
       setIncomingCall(null);
       await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
 
@@ -565,6 +569,28 @@ const RealtimeNotifications = () => {
       cleanupCall();
     }
   };
+
+  // NATIVE_ANDROID: answer-from-system-notification
+  // The Android notification Answer action only requests an answer. The same React
+  // WebRTC code still creates/owns the peer connection, so website and APK never fork.
+  useEffect(() => {
+    const requestNativeAnswer = () => {
+      nativeAutoAnswerRef.current = true;
+      try { sessionStorage.removeItem('itbird-native-answer-call'); } catch {}
+    };
+
+    try {
+      if (sessionStorage.getItem('itbird-native-answer-call') === '1') requestNativeAnswer();
+    } catch {}
+    window.addEventListener('itbird-native-answer-call', requestNativeAnswer);
+    return () => window.removeEventListener('itbird-native-answer-call', requestNativeAnswer);
+  }, []);
+
+  useEffect(() => {
+    if (!nativeAutoAnswerRef.current || !incomingCall || !offerReady) return;
+    nativeAutoAnswerRef.current = false;
+    void acceptIncomingCall();
+  }, [incomingCall, offerReady]);
 
   const declineIncomingCall = () => {
     (window as typeof window & { __itbirdActiveCallEnd?: () => void }).__itbirdActiveCallEnd?.();
@@ -588,11 +614,15 @@ const RealtimeNotifications = () => {
     const socket = createReconnectingWebSocket(getWsUrl());
     socketRef.current = socket;
     socket.onopen = () => {
-      socket.send(JSON.stringify({ type: "AUTH", token }));
+      // NATIVE_ANDROID: global-call-host
+      socket.send(JSON.stringify({ type: "AUTH", token, clientRole: "call-host" }));
     };
 
     socket.onmessage = (event) => {
       const notification = JSON.parse(event.data);
+
+      // SOCIALBIRD_CALL_SYSTEM_V4: CallProvider owns CALL_* signalling
+      if (String(notification.type || '').startsWith('CALL_')) return;
 
       if (notification.type === "ONLINE_USERS" || notification.type === "USER_PRESENCE") {
         writeOnlineUserIds(notification.data.userIds || []);

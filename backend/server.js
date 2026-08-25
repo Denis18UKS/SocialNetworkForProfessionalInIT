@@ -16,6 +16,7 @@ const fs = require('fs'); // Добавляем модуль для работы
 const crypto = require('crypto');
 // PRODUCTION_HARDENING: isolated-compiler-client
 const { runSandboxedCompilerJob } = require('./compiler-client');
+const { registerPasswordRecoveryRoutes } = require('./password-recovery');
 
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
@@ -169,8 +170,22 @@ wss.on('connection', (ws) => {
     ws.on('message', (message) => {
         try {
             const payload = JSON.parse(message);
+            // NATIVE_ANDROID: notification-only-auth
+            // Android owns OS-level background ringing/notifications only. It does not
+            // become an interactive presence socket and never consumes WebRTC replay.
+            if (payload.type === 'AUTH_NATIVE' && payload.token) {
+                const decoded = jwt.verify(payload.token, process.env.JWT_SECRET);
+                ws.userId = Number(decoded.id);
+                ws.clientRole = 'android-native';
+                ws.nativeNotificationSocket = true;
+                ws.send(JSON.stringify({ type: 'NATIVE_AUTH_OK', data: { userId: Number(decoded.id) } }));
+                return;
+            }
+
             if (payload.type === 'AUTH' && payload.token) {
                 const decoded = jwt.verify(payload.token, process.env.JWT_SECRET);
+                // NATIVE_ANDROID: role-aware-web-auth
+                ws.clientRole = String(payload.clientRole || 'generic');
                 addOnlineSocket(decoded.id, ws);
                 ws.send(JSON.stringify({ type: 'ONLINE_USERS', data: { userIds: getOnlineUserIds() } }));
                 notifyClients({
@@ -213,6 +228,8 @@ wss.on('connection', (ws) => {
 });
 
 // WebSocket уведомление
+// NATIVE_FCM_PUSH: dispatcher-slot
+let nativeFcmPush = null;
 // PRODUCTION_HARDENING: authenticated-targeted-notifications
 const notifyClients = (notification) => {
     const data = notification?.data || {};
@@ -233,6 +250,15 @@ const notifyClients = (notification) => {
         if (hasExplicitTargets && !targetIds.has(Number(client.userId))) return;
         client.send(serializedNotification);
     });
+
+    // NATIVE_FCM_PUSH: dispatch-targeted-notification
+    // FCM is a wake-up/OS notification transport only. React/WebRTC remains the
+    // interactive call implementation and durable OFFER/ICE replay stays unchanged.
+    if (nativeFcmPush && hasExplicitTargets) {
+        void nativeFcmPush.dispatch(notification).catch((error) => {
+            console.warn('Native FCM dispatch error:', error.message);
+        });
+    }
 };
 
 const getChatParticipants = async (chatId) => {
@@ -1162,53 +1188,8 @@ app.post('/login', async (req, res) => {
     }
 });
 
-app.post('/password-reset/request', async (req, res) => {
-    const { email } = req.body;
-
-    if (!email) {
-        return res.status(400).json({ message: 'Укажите почту' });
-    }
-
-    try {
-        const [users] = await db.query(
-            'SELECT id, email, username FROM users WHERE email = ?',
-            [email]
-        );
-
-        if (users.length === 0) {
-            return res.status(404).json({ message: 'Пользователь с такой почтой не найден' });
-        }
-
-        const temporaryPassword = crypto.randomInt(100000, 1000000).toString();
-        const hashedPassword = await bcrypt.hash(temporaryPassword, 10);
-
-        await db.query(
-            'UPDATE users SET password = ? WHERE id = ?',
-            [hashedPassword, users[0].id]
-        );
-
-        await transporter.sendMail({
-            from: '"IT-BIRD" <den4ik200518@mail.ru>',
-            to: users[0].email,
-            subject: 'Восстановление пароля IT-BIRD',
-            text: `Ваш временный пароль: ${temporaryPassword}`,
-            html: `
-                <div style="font-family: Arial, sans-serif; line-height: 1.5;">
-                    <h2>Восстановление пароля IT-BIRD</h2>
-                    <p>Здравствуйте, ${users[0].username}.</p>
-                    <p>Ваш временный пароль:</p>
-                    <p style="font-size: 24px; font-weight: bold; letter-spacing: 4px;">${temporaryPassword}</p>
-                    <p>Используйте этот код как пароль для входа в аккаунт.</p>
-                </div>
-            `,
-        });
-
-        res.json({ message: 'Временный пароль отправлен на почту' });
-    } catch (error) {
-        console.error('Password reset error:', error);
-        res.status(500).json({ message: 'Не удалось отправить временный пароль' });
-    }
-});
+// MAIL_RECOVERY: secure-reset-routes
+registerPasswordRecoveryRoutes({ app, db, transporter, bcrypt, crypto });
 
 // Маршрут для получения списка пользователей
 app.get("/users", async (req, res) => {
@@ -2709,7 +2690,7 @@ app.patch('/group-messages/:messageId/unpin-self', verifyToken, async (req, res)
 });
 
 // Загрузка файлов в групповой чат
-app.post('/group-chats/:chatId/upload', verifyToken, upload.single('media'), async (req, res) => {
+app.post('/group-chats/:chatId/upload', verifyToken, uploadChatMedia, async (req, res) => {
     const { chatId } = req.params;
     const userId = req.user.id;
     const file = req.file;
@@ -2749,6 +2730,8 @@ app.post('/group-chats/:chatId/upload', verifyToken, upload.single('media'), asy
             [chatId, userId]
         );
         const recipientIds = members.map((member) => member.user_id);
+        // CHAT_MEDIA_BACKEND_FIX: media uploads can contain mentions too.
+        const mentionRecipientIds = await resolveGroupMentionRecipients(chatId, messageText, userId);
 
         const newMessage = {
             id: result.insertId,
@@ -4024,6 +4007,10 @@ app.post("/answers/:answerId/comments", verifyToken, async (req, res) => {
         res.status(500).json({ message: "Ошибка сервера" });
     }
 });
+
+// NATIVE_FCM_PUSH: register-routes
+const { registerNativeFcmPush } = require('./native-fcm-push');
+nativeFcmPush = registerNativeFcmPush({ app, db, verifyToken });
 
 // Старт сервера
 // PRODUCTION_HARDENING: configurable-listen-address
