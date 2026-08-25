@@ -68,6 +68,7 @@ sudo -u "$APP_USER" git fetch origin +"$BRANCH:refs/remotes/origin/$BRANCH"
 sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   backend/socialbird-final-platform.js backend/strict-privacy-gate.js backend/stable-news-time.js \
   backend/cinema-qr.js backend/cinema-stream.js backend/admin-cinema-library.js backend/cinema-transcode-worker.js \
+  admin-desktop/main.cjs admin-desktop/preload.cjs admin-desktop/renderer/cinema.js \
   src/App.tsx src/components/VoiceCallControls.tsx src/components/GlobalCallOverlay.tsx \
   src/components/StrictUserProfileRoute.tsx src/components/AppSidebar.tsx src/components/CinemaQrScanner.tsx \
   src/lib/call-audio-reliability.ts src/lib/cinema-upload.ts \
