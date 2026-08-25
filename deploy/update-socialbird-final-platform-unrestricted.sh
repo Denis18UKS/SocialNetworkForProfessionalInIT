@@ -13,9 +13,9 @@ trap 'rm -f "$TMP" "$TMP2"' EXIT
 cd "$APP_DIR"
 [[ -f "$SOURCE" ]] || { echo "Missing $SOURCE" >&2; exit 1; }
 
-# Only optional/unrestricted C-Party patchers are refreshed before the generated
-# deployment starts. Canonical application files are fetched by the normal updater
-# after its rollback backup is created.
+# Only optional/unrestricted C-Party patchers and new additive Call V4 bridge files
+# are refreshed before the generated deployment starts. Canonical application files
+# are fetched by the normal updater after its rollback backup is created.
 sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   deploy/apply-cinema-unrestricted-storage.mjs \
   deploy/apply-cinema-format-normalization-v1.mjs \
@@ -23,6 +23,8 @@ sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   deploy/apply-cinema-upload-compat-v1.mjs \
   deploy/apply-cparty-session-media-change-v1.mjs \
   deploy/apply-cparty-participant-media-reload-v2.mjs \
+  src/components/call/NativeCallAudioBridge.tsx \
+  src/components/call/PushCallDeepLinkBridge.tsx \
   backend/cinema-transcode-worker.js
 node --check deploy/apply-cinema-unrestricted-storage.mjs
 node --check deploy/apply-cinema-format-normalization-v1.mjs
@@ -32,7 +34,7 @@ node --check deploy/apply-cparty-session-media-change-v1.mjs
 node --check deploy/apply-cparty-participant-media-reload-v2.mjs
 node --check backend/cinema-transcode-worker.js
 
-# SOCIALBIRD_UNRESTRICTED_DEPLOY_V9
+# SOCIALBIRD_UNRESTRICTED_DEPLOY_V10
 # Remove only the artificial pre-deploy free-space gate. Normal backup, rollback,
 # syntax checks, frontend build, nginx, PM2 and smoke tests remain enabled.
 awk '
@@ -49,6 +51,8 @@ skipping { next }
 # rewritten here.
 awk '
 /^echo "\[2\/10\] Checking modules"/ {
+  print "test -s src/components/call/NativeCallAudioBridge.tsx"
+  print "test -s src/components/call/PushCallDeepLinkBridge.tsx"
   print "if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then"
   print "  export DEBIAN_FRONTEND=noninteractive"
   print "  apt-get update -qq"
