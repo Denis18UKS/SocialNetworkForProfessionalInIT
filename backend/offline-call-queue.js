@@ -33,6 +33,20 @@ const registerOfflineCallQueue = ({ db, isUserOnline }) => {
 
         try {
             await db.query('DELETE FROM pending_call_signals WHERE expires_at <= NOW()');
+
+            // SOCIALBIRD_CALL_SYSTEM_V4: accepted-call-cleanup
+            // A callee answering/accepting carries initiatorId. Remove caller -> callee
+            // durable rows immediately so a later reconnect cannot resurrect the call.
+            const originalCallerId = Number(data?.initiatorId || data?.originalCallerId || data?.senderId);
+            if (['CALL_ACCEPT', 'CALL_ANSWER', 'CALL_HANGUP'].includes(type)
+                && originalCallerId > 0
+                && originalCallerId !== Number(senderId)) {
+                const incomingCallKey = buildCallKey(originalCallerId, data);
+                await db.query(
+                    'DELETE FROM pending_call_signals WHERE target_user_id = ? AND sender_user_id = ? AND call_key = ?',
+                    [Number(senderId), originalCallerId, incomingCallKey]
+                );
+            }
             if (type === 'CALL_HANGUP') {
                 await db.query(
                     'DELETE FROM pending_call_signals WHERE sender_user_id = ? AND call_key = ? AND target_user_id IN (?)',
@@ -42,10 +56,11 @@ const registerOfflineCallQueue = ({ db, isUserOnline }) => {
             }
 
             if (!['CALL_INVITE', 'CALL_OFFER', 'CALL_ICE', 'CALL_RELAY_TRACK'].includes(type)) return;
-            const offlineTargets = uniqueTargets.filter((userId) => !isUserOnline(userId));
-            if (offlineTargets.length === 0) return;
 
-            for (const targetUserId of offlineTargets) {
+            // SOCIALBIRD_CALL_SYSTEM_V4: durable-signals
+            // Persist even when presence says online: suspended mobile WebViews can
+            // leave an OPEN socket behind while no JavaScript is actually consuming it.
+            for (const targetUserId of uniqueTargets) {
                 const payload = {
                     ...data,
                     senderId: Number(senderId),

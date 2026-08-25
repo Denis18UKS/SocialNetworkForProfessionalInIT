@@ -16,6 +16,7 @@ const fs = require('fs'); // Добавляем модуль для работы
 const crypto = require('crypto');
 // PRODUCTION_HARDENING: isolated-compiler-client
 const { runSandboxedCompilerJob } = require('./compiler-client');
+const { registerOfflineCallQueue } = require('./offline-call-queue');
 const { registerPasswordRecoveryRoutes } = require('./password-recovery');
 
 const storage = multer.diskStorage({
@@ -163,6 +164,9 @@ const removeOnlineSocket = (ws) => {
 
 const getOnlineUserIds = () => Array.from(onlineUsers.keys());
 const isUserOnline = (userId) => onlineUsers.has(Number(userId));
+// SOCIALBIRD_CALL_SYSTEM_V4: offline-call-function-refs
+let queueOfflineCallSignal = async () => {};
+let deliverPendingCallSignals = async () => {};
 
 wss.on('connection', (ws) => {
     console.log('WebSocket client connected');
@@ -187,6 +191,10 @@ wss.on('connection', (ws) => {
                 // NATIVE_ANDROID: role-aware-web-auth
                 ws.clientRole = String(payload.clientRole || 'generic');
                 addOnlineSocket(decoded.id, ws);
+                // SOCIALBIRD_CALL_SYSTEM_V4: call-host-replay
+                if (ws.clientRole === 'call-host') {
+                    void deliverPendingCallSignals(decoded.id, ws);
+                }
                 ws.send(JSON.stringify({ type: 'ONLINE_USERS', data: { userIds: getOnlineUserIds() } }));
                 notifyClients({
                     type: 'USER_PRESENCE',
@@ -209,6 +217,8 @@ wss.on('connection', (ws) => {
                         targetIds,
                     },
                 });
+                // SOCIALBIRD_CALL_SYSTEM_V4: queue-call-signals
+                void queueOfflineCallSignal(payload.type, targetIds, payload.data || {}, Number(ws.userId));
             }
         } catch (error) {
             console.error('WebSocket message error:', error.message);
@@ -4011,6 +4021,9 @@ app.post("/answers/:answerId/comments", verifyToken, async (req, res) => {
 // NATIVE_FCM_PUSH: register-routes
 const { registerNativeFcmPush } = require('./native-fcm-push');
 nativeFcmPush = registerNativeFcmPush({ app, db, verifyToken });
+
+// SOCIALBIRD_CALL_SYSTEM_V4: register-offline-call-queue
+({ queueOfflineCallSignal, deliverPendingCallSignals } = registerOfflineCallQueue({ db, isUserOnline }));
 
 // Старт сервера
 // PRODUCTION_HARDENING: configurable-listen-address
