@@ -82,7 +82,10 @@ for (const expected of ['<CallProvider>', '<NativeCallAudioBridge />', '<PushCal
 if (!webrtc.includes('CameraFacingMode') || !webrtc.includes('facingMode')) {
   throw new Error('Call system V4 mobile camera controls missing');
 }
-if (!sw.includes('ITBIRD_PUSH_CALL_OPEN') || !sw.includes("action: action || 'open'")) {
+const hasPushActionBridge = sw.includes('ITBIRD_PUSH_CALL_OPEN')
+  && sw.includes("callAction = action === 'answer' ? 'answer' : 'open'")
+  && sw.includes('action: callAction');
+if (!hasPushActionBridge) {
   throw new Error('Call system V4 PWA push-answer bridge missing');
 }
 if (!realtime.includes(marker)) throw new Error('Call system V4 realtime isolation marker missing');
