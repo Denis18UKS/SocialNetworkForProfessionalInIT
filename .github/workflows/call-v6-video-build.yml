@@ -1,0 +1,55 @@
+name: Call V6 video track build
+
+on:
+  push:
+    branches:
+      - deploy/socialbird-vps-production
+  workflow_dispatch:
+
+concurrency:
+  group: socialbird-call-v6-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  call-v6-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Apply Call V4 V5 V6
+        run: |
+          node deploy/apply-call-system-v4.mjs
+          node deploy/apply-call-system-v5.mjs
+          node deploy/apply-call-system-v5-push-state-fix.mjs
+          node deploy/apply-call-system-v6-video-track.mjs
+          node --check deploy/apply-call-system-v6-video-track.mjs
+          grep -q 'SOCIALBIRD_CALL_SYSTEM_V6: real-camera-sender' src/components/call/CallProvider.tsx
+          grep -q 'cameraSender: RTCRtpSender | null' src/components/call/CallProvider.tsx
+          grep -q 'bundle.pc.addTrack(track, local)' src/components/call/CallProvider.tsx
+          grep -q 'SOCIALBIRD_CALL_SYSTEM_V6: remote-video-unmute-refresh' src/components/call/CallProvider.tsx
+          grep -q 'SOCIALBIRD_CALL_SYSTEM_V6: restore-existing-unmuted-camera' src/components/call/CallProvider.tsx
+
+      - name: Install frontend dependencies
+        run: npm ci
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: 'true'
+
+      - name: Build frontend
+        run: npm run build
+        env:
+          VITE_API_URL: https://api.socialbird.ru
+          VITE_STUN_URLS: stun:stun.l.google.com:19302
+          VITE_TURN_URLS: turn:api.socialbird.ru:3478?transport=udp,turn:api.socialbird.ru:3478?transport=tcp,turns:api.socialbird.ru:5349?transport=tcp
+          VITE_TURN_USERNAME: socialbird
+          VITE_TURN_CREDENTIAL: ci-placeholder-only
+
+      - name: Validate diff
+        run: git diff --check
