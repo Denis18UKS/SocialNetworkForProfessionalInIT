@@ -40,6 +40,7 @@ import SeoManager from './components/SeoManager';
 import MediaViewerHost from './components/MediaViewerHost';
 import GlobalCallOverlay from './components/GlobalCallOverlay';
 import StrictUserProfileRoute from './components/StrictUserProfileRoute';
+import { CallProvider } from './components/call/CallProvider';
 import { AuthProvider } from "@/pages/AuthContext";
 import './styles/chat-platform-v1.css';
 
@@ -151,7 +152,9 @@ const App = () => {
         <MediaViewerHost />
         <AuthProvider>
           <BrowserRouter>
-            <AppLayout />
+            <CallProvider>
+              <AppLayout />
+            </CallProvider>
           </BrowserRouter>
         </AuthProvider>
       </TooltipProvider>
