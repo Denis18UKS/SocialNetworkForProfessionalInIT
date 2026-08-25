@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
 
 const read = (file) => fs.readFileSync(file, 'utf8');
 const write = (file, source) => fs.writeFileSync(file, source, 'utf8');
@@ -8,18 +9,27 @@ const replaceOnce = (source, label, from, to) => {
   return source.replace(from, to);
 };
 
+const verifyNodeSyntax = (file) => {
+  const result = spawnSync(process.execPath, ['--check', file], { stdio: 'inherit' });
+  if (result.status !== 0) throw new Error(`C-Party realtime-end produced invalid JavaScript: ${file}`);
+};
+
 const patchBackend = () => {
   const file = 'backend/socialbird-final-platform.js';
   let source = read(file);
   const marker = '// SOCIALBIRD_CPARTY_REALTIME_END_V1: server-broadcast';
-  if (source.includes(marker)) return;
+  if (source.includes(marker)) {
+    verifyNodeSyntax(file);
+    return;
+  }
 
   const oldBlock = `    app.delete('/cinema/rooms/:id', auth, async (req, res) => {\n        const [result] = await db.query('UPDATE cinema_rooms SET is_active = 0 WHERE id = ? AND owner_id = ?', [Number(req.params.id), getUserId(req)]);\n        if (!result.affectedRows) return res.status(403).json({ message: 'Завершить комнату может только её создатель.' });\n        res.json({ ended: true });\n    });`;
 
-  const newBlock = `    app.delete('/cinema/rooms/:id', auth, async (req, res) => {\n        const roomId = Number(req.params.id);\n        const userId = getUserId(req);\n        const [rooms] = await db.query('SELECT id, owner_id FROM cinema_rooms WHERE id = ? AND is_active = 1 LIMIT 1', [roomId]);\n        if (!rooms.length) return res.status(404).json({ message: 'Комната уже завершена или не найдена.' });\n        if (Number(rooms[0].owner_id) !== userId) return res.status(403).json({ message: 'Завершить комнату может только её создатель.' });\n\n        await db.query('UPDATE cinema_rooms SET is_active = 0, playback_state = \'paused\', playback_updated_at = NOW() WHERE id = ?', [roomId]);\n\n        ${marker}\n        if (notifyClients) {\n            try {\n                notifyClients({\n                    type: 'CINEMA_ROOM_ENDED',\n                    data: { roomId, endedBy: userId, endedAt: Date.now(), reason: 'owner-ended' },\n                });\n            } catch (error) {\n                console.warn('C-Party realtime end notification failed:', error?.message || error);\n            }\n        }\n\n        res.json({ ended: true, roomId });\n    });`;
+  const newBlock = `    app.delete('/cinema/rooms/:id', auth, async (req, res) => {\n        const roomId = Number(req.params.id);\n        const userId = getUserId(req);\n        const [rooms] = await db.query('SELECT id, owner_id FROM cinema_rooms WHERE id = ? AND is_active = 1 LIMIT 1', [roomId]);\n        if (!rooms.length) return res.status(404).json({ message: 'Комната уже завершена или не найдена.' });\n        if (Number(rooms[0].owner_id) !== userId) return res.status(403).json({ message: 'Завершить комнату может только её создатель.' });\n\n        await db.query(\"UPDATE cinema_rooms SET is_active = 0, playback_state = 'paused', playback_updated_at = NOW() WHERE id = ?\", [roomId]);\n\n        ${marker}\n        if (notifyClients) {\n            try {\n                notifyClients({\n                    type: 'CINEMA_ROOM_ENDED',\n                    data: { roomId, endedBy: userId, endedAt: Date.now(), reason: 'owner-ended' },\n                });\n            } catch (error) {\n                console.warn('C-Party realtime end notification failed:', error?.message || error);\n            }\n        }\n\n        res.json({ ended: true, roomId });\n    });`;
 
   source = replaceOnce(source, 'backend room delete route', oldBlock, newBlock);
   write(file, source);
+  verifyNodeSyntax(file);
 };
 
 const patchRealtimeBridge = () => {
@@ -63,5 +73,6 @@ const patchRoomPage = () => {
 patchBackend();
 patchRealtimeBridge();
 patchRoomPage();
+verifyNodeSyntax('backend/socialbird-final-platform.js');
 
-console.log('C-Party realtime end applied: server broadcasts room termination, clients stop playback and are force-ejected, polling fallback enabled.');
+console.log('C-Party realtime end applied: server broadcasts room termination, clients stop playback and are force-ejected, polling fallback enabled; backend syntax verified.');
