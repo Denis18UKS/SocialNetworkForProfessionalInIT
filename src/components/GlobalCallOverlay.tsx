@@ -34,9 +34,37 @@ const VideoSurface = ({ stream, label, muted = true }: { stream: MediaStream; la
   useEffect(() => {
     const video = ref.current;
     if (!video) return;
+    let disposed = false;
+    // SOCIALBIRD_CALL_SYSTEM_V5: resilient-remote-video
+    const ensurePlaying = () => {
+      if (disposed) return;
+      if (video.srcObject !== stream) video.srcObject = stream;
+      void video.play().catch(() => undefined);
+    };
     video.srcObject = stream;
-    void video.play().catch(() => undefined);
+    stream.getVideoTracks().forEach((track) => {
+      track.addEventListener("unmute", ensurePlaying);
+      track.addEventListener("mute", ensurePlaying);
+    });
+    video.addEventListener("loadedmetadata", ensurePlaying);
+    video.addEventListener("canplay", ensurePlaying);
+    window.addEventListener("focus", ensurePlaying);
+    window.addEventListener("pageshow", ensurePlaying);
+    document.addEventListener("visibilitychange", ensurePlaying);
+    const timer = window.setInterval(ensurePlaying, 1200);
+    ensurePlaying();
     return () => {
+      disposed = true;
+      window.clearInterval(timer);
+      stream.getVideoTracks().forEach((track) => {
+        track.removeEventListener("unmute", ensurePlaying);
+        track.removeEventListener("mute", ensurePlaying);
+      });
+      video.removeEventListener("loadedmetadata", ensurePlaying);
+      video.removeEventListener("canplay", ensurePlaying);
+      window.removeEventListener("focus", ensurePlaying);
+      window.removeEventListener("pageshow", ensurePlaying);
+      document.removeEventListener("visibilitychange", ensurePlaying);
       if (video.srcObject === stream) video.srcObject = null;
     };
   }, [stream]);
@@ -75,6 +103,8 @@ const GlobalCallOverlay = () => {
     incoming,
     remoteMedia,
     speakingUserIds,
+    participantVolumes,
+    setParticipantVolume,
     currentUserId,
     isMobile,
     acceptIncoming,
@@ -215,6 +245,20 @@ const GlobalCallOverlay = () => {
                 <span className={`h-2 w-2 rounded-full ${speaking ? "animate-pulse bg-emerald-400" : "bg-white/25"}`} />
                 <span className="max-w-36 truncate">{self ? `${participant.username} (вы)` : participant.username}</span>
                 {speaking && <span className="text-[10px] font-semibold text-emerald-300">Говорит</span>}
+                {!self && (
+                  <label className="ml-1 flex items-center gap-1.5" title={`Громкость ${participant.username}`}>
+                    {/* SOCIALBIRD_CALL_SYSTEM_V5: participant-volume-slider */}
+                    {(participantVolumes[id] ?? 1) <= 0.001 ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
+                    <input
+                      type="range" min="0" max="100" step="1"
+                      value={Math.round((participantVolumes[id] ?? 1) * 100)}
+                      onChange={(event) => setParticipantVolume(id, Number(event.currentTarget.value) / 100)}
+                      className="h-1.5 w-20 cursor-pointer accent-emerald-400 sm:w-24"
+                      aria-label={`Громкость ${participant.username}`}
+                    />
+                    <span className="w-8 text-right text-[10px] tabular-nums text-white/60">{Math.round((participantVolumes[id] ?? 1) * 100)}%</span>
+                  </label>
+                )}
               </div>
             );
           })}
@@ -286,7 +330,7 @@ const GlobalCallOverlay = () => {
             </Button>
           )}
 
-          <Button type="button" size="sm" variant="ghost" className={`${controlClass} ${call.cameraEnabled ? "bg-emerald-500/20" : "bg-white/10"}`} onClick={() => void toggleCamera()} title={call.cameraEnabled ? "Выключить камеру" : "Включить камеру"}>
+          <Button type="button" size="sm" variant="ghost" className={`${controlClass} ${call.cameraEnabled ? "bg-emerald-500/20" : "bg-white/10"}`} onClick={() => void toggleCamera()} title={call.cameraEnabled ? "Выключить видео" : "Включить видео"}>
             {call.cameraEnabled ? <Video className="h-5 w-5 text-emerald-300" /> : <VideoOff className="h-5 w-5 text-red-300" />}
           </Button>
 

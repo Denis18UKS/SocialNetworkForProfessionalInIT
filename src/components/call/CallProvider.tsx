@@ -86,6 +86,8 @@ type CallSignal = {
   endForAll?: boolean;
   participantLeft?: boolean;
   screenStreamId?: string;
+  cameraEnabled?: boolean;
+  cameraFacing?: CameraFacingMode;
 };
 
 type StartCallInput = {
@@ -123,6 +125,8 @@ type CallManagerContextValue = {
   incoming: CallSignal | null;
   remoteMedia: Record<number, RemoteCallMedia>;
   speakingUserIds: number[];
+  participantVolumes: Record<number, number>;
+  setParticipantVolume: (userId: number, volume: number) => void;
   currentUserId: number | null;
   isMobile: boolean;
   startCall: (input: StartCallInput) => Promise<void>;
@@ -170,6 +174,20 @@ const parseNativeCall = (value: unknown): Partial<CallSignal> | null => {
   }
 };
 
+// SOCIALBIRD_CALL_SYSTEM_V5: participant-volume-storage
+const participantVolumeKey = (userId: number) => `socialbird:call-volume:${userId}`;
+const readParticipantVolume = (userId: number) => {
+  try {
+    const raw = localStorage.getItem(participantVolumeKey(userId));
+    if (raw === null || raw.trim() === "") return 1;
+    const value = Number(raw);
+    return Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 1;
+  } catch { return 1; }
+};
+const writeParticipantVolume = (userId: number, volume: number) => {
+  try { localStorage.setItem(participantVolumeKey(userId), String(volume)); } catch {}
+};
+
 const setWindowCallState = (state: CallSnapshot | null) => {
   const callWindow = window as typeof window & {
     __itbirdActiveCallState?: CallSnapshot | null;
@@ -186,6 +204,7 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
   const [incoming, setIncoming] = useState<CallSignal | null>(null);
   const [remoteMedia, setRemoteMedia] = useState<Record<number, RemoteCallMedia>>({});
   const [speakingUserIds, setSpeakingUserIds] = useState<number[]>([]);
+  const [participantVolumes, setParticipantVolumes] = useState<Record<number, number>>({});
 
   const callRef = useRef<CallSnapshot | null>(null);
   const incomingRef = useRef<CallSignal | null>(null);
@@ -198,9 +217,15 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
   const expectedScreenStreamRef = useRef<Record<number, string>>({});
   const remoteStreamByIdRef = useRef<Record<string, { peerId: number; stream: MediaStream }>>({});
   const audioBindingsRef = useRef<Record<string, AudioBinding>>({});
+  const participantVolumesRef = useRef<Record<number, number>>({});
+  const cameraResyncTimersRef = useRef<Record<number, number>>({});
   const speakingStopsRef = useRef<Record<string, () => void>>({});
   const audioRootRef = useRef<HTMLDivElement | null>(null);
   const autoAnswerRef = useRef(false);
+  // SOCIALBIRD_CALL_SYSTEM_V5: pending-push-answer
+  const pendingPushAnswerRef = useRef(false);
+  const socketReadyRef = useRef(false);
+  const acceptedConnectTimerRef = useRef<number | null>(null);
   // SOCIALBIRD_CALL_SYSTEM_V4: accept-transition-lock
   const acceptingRef = useRef(false);
   const startingRef = useRef(false);
@@ -210,7 +235,8 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
   const currentUsernameRef = useRef("Вы");
   const isMobile = isMobileCallDevice();
 
-  const token = isAuthenticated ? (localStorage.getItem("token") || "") : "";
+  // SOCIALBIRD_CALL_SYSTEM_V5: cold-start-auth-independent
+  const token = localStorage.getItem("token") || "";
 
   useEffect(() => {
     callRef.current = call;
@@ -220,6 +246,9 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
   useEffect(() => {
     incomingRef.current = incoming;
   }, [incoming]);
+
+  // SOCIALBIRD_CALL_SYSTEM_V5: volume-ref-sync
+  useEffect(() => { participantVolumesRef.current = participantVolumes; }, [participantVolumes]);
 
   useEffect(() => {
     if (!token) {
@@ -314,7 +343,10 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
   const publishActive = useCallback((snapshot: CallSnapshot) => {
     setCall(snapshot);
     window.dispatchEvent(new CustomEvent("itbird-call-active", { detail: snapshot }));
-    window.dispatchEvent(new CustomEvent("itbird-native-call-state", { detail: { active: true } }));
+    // SOCIALBIRD_CALL_SYSTEM_V5: native-state-follows-real-phase
+    window.dispatchEvent(new CustomEvent("itbird-native-call-state", {
+      detail: { active: snapshot.phase === "active", connecting: snapshot.phase !== "active", phase: snapshot.phase },
+    }));
   }, []);
 
   const stopAllPeerResources = useCallback(() => {
@@ -355,6 +387,12 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
     setCall(null);
     callRef.current = null;
     autoAnswerRef.current = false;
+    pendingPushAnswerRef.current = false;
+    // SOCIALBIRD_CALL_SYSTEM_V5: clear-connect-timeout
+    if (acceptedConnectTimerRef.current !== null) {
+      window.clearTimeout(acceptedConnectTimerRef.current);
+      acceptedConnectTimerRef.current = null;
+    }
     setWindowCallState(null);
     window.dispatchEvent(new CustomEvent("itbird-call-ended", { detail: { source } }));
     window.dispatchEvent(new CustomEvent("itbird-native-call-state", { detail: { active: false } }));
@@ -381,6 +419,11 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
         },
       });
     }
+    // SOCIALBIRD_CALL_SYSTEM_V5: remote-audio-volume
+    const peerVolume = participantVolumesRef.current[peerId] ?? readParticipantVolume(peerId);
+    participantVolumesRef.current[peerId] = peerVolume;
+    audioBindingsRef.current[key].media.volume = peerVolume;
+    setParticipantVolumes((current) => current[peerId] === peerVolume ? current : { ...current, [peerId]: peerVolume });
     if (!isScreenAudio) monitorAudioTrack(`remote:${peerId}:${track.id}`, peerId, track);
   }, [monitorAudioTrack]);
 
@@ -418,6 +461,9 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
     delete pendingOffersRef.current[peerId];
     delete pendingIceRef.current[peerId];
     delete expectedScreenStreamRef.current[peerId];
+    // SOCIALBIRD_CALL_SYSTEM_V5: peer-camera-timer-cleanup
+    if (cameraResyncTimersRef.current[peerId]) window.clearTimeout(cameraResyncTimersRef.current[peerId]);
+    delete cameraResyncTimersRef.current[peerId];
     setRemoteMedia((current) => {
       const next = { ...current };
       delete next[peerId];
@@ -484,6 +530,23 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
       await makeOfferRef.current(peerId, true);
     });
 
+    // SOCIALBIRD_CALL_SYSTEM_V5: real-webrtc-connected-state
+    const markRealConnection = () => {
+      if (pc.connectionState !== "connected") return;
+      if (acceptedConnectTimerRef.current !== null) {
+        window.clearTimeout(acceptedConnectTimerRef.current);
+        acceptedConnectTimerRef.current = null;
+      }
+      setCall((current) => {
+        if (!current || current.phase === "active") return current;
+        const next = { ...current, phase: "active" as const };
+        callRef.current = next;
+        window.dispatchEvent(new CustomEvent("itbird-native-call-state", { detail: { active: true, phase: "active" } }));
+        return next;
+      });
+    };
+    pc.addEventListener("connectionstatechange", markRealConnection);
+
     peersRef.current[peerId] = bundle;
     return bundle;
   }, [attachRemoteAudio, classifyRemoteVideo, sendSignal]);
@@ -537,7 +600,7 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
     if (!bundle || bundle.pc.signalingState === "closed") return;
     await bundle.pc.setRemoteDescription(new RTCSessionDescription(signal.description)).catch(() => undefined);
     await flushPendingIce(Number(signal.senderId), bundle.pc);
-    setCall((current) => current ? { ...current, phase: "active" } : current);
+    // V5: SDP answer alone is not a connected call. connectionstatechange owns phase=active.
   }, [flushPendingIce]);
 
   const ensureLocalMedia = useCallback(async (kind: CallKind, facing: CameraFacingMode = "user") => {
@@ -615,14 +678,21 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
 
   const acceptIncoming = useCallback(async () => {
     const invite = incomingRef.current;
-    if (!invite) {
+    if (!invite || !socketReadyRef.current || socketRef.current?.readyState !== WebSocket.OPEN) {
+      // SOCIALBIRD_CALL_SYSTEM_V5: defer-answer-until-ready
       autoAnswerRef.current = true;
+      pendingPushAnswerRef.current = true;
       return;
     }
     if (acceptingRef.current) return;
-    acceptingRef.current = true;
     const selfId = currentUserIdRef.current;
-    if (!selfId) return;
+    if (!selfId) {
+      // SOCIALBIRD_CALL_SYSTEM_V5: cold-start-user-id-defer
+      autoAnswerRef.current = true;
+      pendingPushAnswerRef.current = true;
+      return;
+    }
+    acceptingRef.current = true;
 
     try {
       stopRingtone();
@@ -662,7 +732,19 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
       setIncoming(null);
       incomingRef.current = null;
       autoAnswerRef.current = false;
+      pendingPushAnswerRef.current = false;
       publishActive(snapshot);
+      // SOCIALBIRD_CALL_SYSTEM_V5: accepted-connect-timeout
+      if (acceptedConnectTimerRef.current !== null) window.clearTimeout(acceptedConnectTimerRef.current);
+      acceptedConnectTimerRef.current = window.setTimeout(() => {
+        const active = callRef.current;
+        const connected = Object.values(peersRef.current).some((bundle) => bundle.pc.connectionState === "connected");
+        if (active?.callId === snapshot.callId && !connected) {
+          toast.error("Не удалось установить соединение. Попробуйте позвонить ещё раз.");
+          finishCallLocally("connect-timeout");
+        }
+        acceptedConnectTimerRef.current = null;
+      }, 18000);
 
       const pending = Object.values(pendingOffersRef.current);
       for (const offer of pending) {
@@ -733,6 +815,19 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
     if (results.some((playing) => !playing)) toast.error("Нажмите по экрану и повторите включение звука");
   }, []);
 
+  // SOCIALBIRD_CALL_SYSTEM_V5: set-participant-volume
+  const setParticipantVolume = useCallback((userId: number, volume: number) => {
+    const id = Number(userId);
+    if (!Number.isFinite(id) || id <= 0) return;
+    const normalized = Math.min(1, Math.max(0, Number(volume) || 0));
+    participantVolumesRef.current[id] = normalized;
+    setParticipantVolumes((current) => ({ ...current, [id]: normalized }));
+    writeParticipantVolume(id, normalized);
+    Object.entries(audioBindingsRef.current).forEach(([key, binding]) => {
+      if (key.startsWith(`peer:${id}:`)) binding.media.volume = normalized;
+    });
+  }, []);
+
   const toggleSound = useCallback(() => {
     const active = callRef.current;
     if (!active) return;
@@ -744,17 +839,35 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
     setCall((current) => current ? { ...current, soundEnabled: next } : current);
   }, []);
 
+  const renegotiateCamera = useCallback(async (snapshot: CallSnapshot, track: MediaStreamTrack | null) => {
+    // SOCIALBIRD_CALL_SYSTEM_V5: camera-renegotiation
+    const local = localStreamRef.current;
+    const peerIds = Object.keys(peersRef.current).map(Number);
+    for (const peerId of peerIds) {
+      const bundle = peersRef.current[peerId];
+      if (!bundle || bundle.pc.signalingState === "closed") continue;
+      try {
+        if (typeof bundle.cameraSender.setStreams === "function") bundle.cameraSender.setStreams(...(local ? [local] : []));
+      } catch {}
+      await bundle.cameraSender.replaceTrack(track).catch(() => undefined);
+    }
+    sendSignal("CALL_CAMERA_STATE", allOtherParticipantIds(snapshot), { ...snapshot, cameraEnabled: Boolean(track) });
+    for (const peerId of peerIds) await makeOffer(peerId, true);
+  }, [allOtherParticipantIds, makeOffer, sendSignal]);
+
   const toggleCamera = useCallback(async () => {
     const active = callRef.current;
     if (!active) return;
     if (active.cameraEnabled) {
       const oldTracks = localStreamRef.current?.getVideoTracks() || [];
-      await Promise.all(Object.values(peersRef.current).map((bundle) => bundle.cameraSender.replaceTrack(null).catch(() => undefined)));
       oldTracks.forEach((track) => {
         localStreamRef.current?.removeTrack(track);
         if (track.readyState !== "ended") track.stop();
       });
-      setCall((current) => current ? { ...current, cameraEnabled: false, localStream: localStreamRef.current } : current);
+      const next: CallSnapshot = { ...active, cameraEnabled: false, localStream: localStreamRef.current };
+      callRef.current = next;
+      setCall(next);
+      await renegotiateCamera(next, null);
       return;
     }
 
@@ -766,17 +879,14 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
         if (oldTrack.readyState !== "ended") oldTrack.stop();
       });
       localStreamRef.current.addTrack(track);
-      await Promise.all(Object.values(peersRef.current).map((bundle) => bundle.cameraSender.replaceTrack(track)));
-      setCall((current) => current ? {
-        ...current,
-        callKind: "video",
-        cameraEnabled: true,
-        localStream: localStreamRef.current,
-      } : current);
+      const next: CallSnapshot = { ...active, callKind: "video", cameraEnabled: true, localStream: localStreamRef.current };
+      callRef.current = next;
+      setCall(next);
+      await renegotiateCamera(next, track);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Не удалось включить камеру");
+      toast.error(error instanceof Error ? error.message : "Не удалось включить видео");
     }
-  }, []);
+  }, [renegotiateCamera]);
 
   const switchCamera = useCallback(async () => {
     const active = callRef.current;
@@ -784,36 +894,29 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
     try {
       let nextFacing: CameraFacingMode = active.cameraFacing === "user" ? "environment" : "user";
       let cameraDeviceId: string | undefined;
-
       if (!isMobile) {
         const cameras = await listVideoInputs();
-        if (cameras.length < 2) {
-          toast.info("Доступна только одна камера");
-          return;
-        }
+        if (cameras.length < 2) { toast.info("Доступна только одна камера"); return; }
         const currentTrack = localStreamRef.current?.getVideoTracks()[0];
         const currentDeviceId = currentTrack?.getSettings().deviceId;
         const currentIndex = Math.max(0, cameras.findIndex((camera) => camera.deviceId === currentDeviceId));
         cameraDeviceId = cameras[(currentIndex + 1) % cameras.length]?.deviceId;
         nextFacing = active.cameraFacing;
       }
-
       const { track } = await requestCameraTrack({ facingMode: isMobile ? nextFacing : undefined, deviceId: cameraDeviceId });
       const oldTrack = localStreamRef.current?.getVideoTracks()[0];
       if (!localStreamRef.current) localStreamRef.current = new MediaStream();
       if (oldTrack) localStreamRef.current.removeTrack(oldTrack);
       localStreamRef.current.addTrack(track);
-      await Promise.all(Object.values(peersRef.current).map((bundle) => bundle.cameraSender.replaceTrack(track)));
+      const next: CallSnapshot = { ...active, cameraFacing: nextFacing, cameraEnabled: true, callKind: "video", localStream: localStreamRef.current };
+      callRef.current = next;
+      setCall(next);
+      await renegotiateCamera(next, track);
       if (oldTrack && oldTrack.readyState !== "ended") oldTrack.stop();
-      setCall((current) => current ? {
-        ...current,
-        cameraFacing: nextFacing,
-        localStream: localStreamRef.current,
-      } : current);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Не удалось переключить камеру");
     }
-  }, [isMobile]);
+  }, [isMobile, renegotiateCamera]);
 
   const stopScreenShare = useCallback(async (broadcast = true) => {
     const active = callRef.current;
@@ -960,7 +1063,46 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
         // SOCIALBIRD_CALL_SYSTEM_V4: fresh-offer-after-accept
         if (selfId < peerId || active.direction === "outgoing") await makeOffer(peerId, true);
       }
-      setCall((current) => current ? { ...current, phase: "active" } : current);
+      // V5: CALL_ACCEPT only starts/refreshes negotiation; real WebRTC connected marks active.
+      return;
+    }
+
+    // SOCIALBIRD_CALL_SYSTEM_V5: remote-camera-resync
+    if (type === "CALL_CAMERA_STATE") {
+      const peerId = Number(signal.senderId);
+      if (cameraResyncTimersRef.current[peerId]) window.clearTimeout(cameraResyncTimersRef.current[peerId]);
+      if (!signal.cameraEnabled) {
+        setRemoteMedia((current) => {
+          const previous = current[peerId];
+          if (!previous) return current;
+          const next = { ...previous };
+          delete next.camera;
+          return { ...current, [peerId]: next };
+        });
+        return;
+      }
+      cameraResyncTimersRef.current[peerId] = window.setTimeout(() => {
+        const screenId = expectedScreenStreamRef.current[peerId];
+        const hasLiveCamera = Object.values(remoteStreamByIdRef.current).some((entry) =>
+          entry.peerId === peerId && entry.stream.id !== screenId
+          && entry.stream.getVideoTracks().some((track) => track.readyState === "live" && !track.muted),
+        );
+        if (!hasLiveCamera) sendSignal("CALL_CAMERA_RESYNC", [peerId], signal);
+        delete cameraResyncTimersRef.current[peerId];
+      }, 1400);
+      return;
+    }
+
+    if (type === "CALL_CAMERA_RESYNC") {
+      const active = callRef.current;
+      const peerId = Number(signal.senderId);
+      const track = localStreamRef.current?.getVideoTracks().find((item) => item.readyState === "live") || null;
+      const bundle = peersRef.current[peerId];
+      if (active?.cameraEnabled && bundle && track) {
+        try { if (typeof bundle.cameraSender.setStreams === "function" && localStreamRef.current) bundle.cameraSender.setStreams(localStreamRef.current); } catch {}
+        await bundle.cameraSender.replaceTrack(track).catch(() => undefined);
+        await makeOffer(peerId, true);
+      }
       return;
     }
 
@@ -1013,7 +1155,8 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
   }, [acceptIncoming, declineIncoming, finishCallLocally, handleAnswer, handleOffer, makeOffer, processIncomingInvite, removePeer]);
 
   useEffect(() => {
-    if (!isAuthenticated || !token) {
+    if (!token) {
+      socketReadyRef.current = false;
       socketRef.current?.close();
       socketRef.current = null;
       if (callRef.current || incomingRef.current) finishCallLocally("logout");
@@ -1022,19 +1165,28 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
 
     const socket = createReconnectingWebSocket(getWsUrl());
     socketRef.current = socket;
+    socketReadyRef.current = false;
     socket.onopen = () => socket.send(JSON.stringify({ type: "AUTH", token, clientRole: "call-host" }));
     socket.onmessage = (event) => {
       try {
         const payload = JSON.parse(event.data);
-        if (!String(payload.type || "").startsWith("CALL_")) return;
-        void handleCallSignal(String(payload.type), payload.data || {});
+        const type = String(payload.type || "");
+        if (type === "ONLINE_USERS" || type.startsWith("CALL_")) {
+          // SOCIALBIRD_CALL_SYSTEM_V5: authenticated-call-host-ready
+          socketReadyRef.current = true;
+        }
+        if (type.startsWith("CALL_")) void handleCallSignal(type, payload.data || {});
+        if (socketReadyRef.current && pendingPushAnswerRef.current && incomingRef.current) {
+          window.setTimeout(() => { void acceptIncoming(); }, 0);
+        }
       } catch {}
     };
     return () => {
+      socketReadyRef.current = false;
       socket.close();
       if (socketRef.current === socket) socketRef.current = null;
     };
-  }, [finishCallLocally, handleCallSignal, isAuthenticated, token]);
+  }, [acceptIncoming, finishCallLocally, handleCallSignal, token]);
 
   useEffect(() => {
     const onNativeAction = (event: Event) => {
@@ -1047,6 +1199,7 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
       }
       if (detail.action === "answer") {
         autoAnswerRef.current = true;
+        pendingPushAnswerRef.current = true;
         if (incomingRef.current) void acceptIncoming();
       } else if (detail.action === "decline") {
         declineIncoming();
@@ -1073,6 +1226,7 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
   useEffect(() => {
     const acceptFromNativeRuntime = () => {
       autoAnswerRef.current = true;
+      pendingPushAnswerRef.current = true;
       try { sessionStorage.removeItem("itbird-native-answer-call"); } catch {}
       if (incomingRef.current) void acceptIncoming();
     };
@@ -1122,6 +1276,8 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
     incoming,
     remoteMedia,
     speakingUserIds,
+    participantVolumes,
+    setParticipantVolume,
     currentUserId: currentUserIdRef.current,
     isMobile,
     startCall,
@@ -1147,6 +1303,8 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
     isMobile,
     remoteMedia,
     speakingUserIds,
+    participantVolumes,
+    setParticipantVolume,
     startCall,
     switchCamera,
     toggleCamera,
