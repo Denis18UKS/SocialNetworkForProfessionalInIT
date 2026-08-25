@@ -48,6 +48,7 @@ jobs:
           node deploy/apply-native-fcm-push.mjs
           node deploy/apply-call-system-v4.mjs
           node deploy/apply-call-system-v5.mjs
+          node deploy/apply-call-system-v5-push-state-fix.mjs
           node deploy/apply-seo-fixes.mjs
           node deploy/harden-source.mjs --in-place
           node deploy/enable-sandbox-compiler.mjs --in-place
@@ -57,6 +58,7 @@ jobs:
         run: |
           node --check deploy/apply-call-system-v4.mjs
           node --check deploy/apply-call-system-v5.mjs
+          node --check deploy/apply-call-system-v5-push-state-fix.mjs
           node --check deploy/apply-mail-recovery-fixes.mjs
           node --check deploy/apply-chat-media-mobile-fix.mjs
           node --check deploy/apply-chat-media-backend-fix.mjs
@@ -95,6 +97,8 @@ jobs:
           grep -q 'setParticipantVolume' src/components/call/CallProvider.tsx
           grep -q 'SOCIALBIRD_CALL_SYSTEM_V5: defer-answer-until-ready' src/components/call/CallProvider.tsx
           grep -q 'SOCIALBIRD_CALL_SYSTEM_V5: real-webrtc-connected-state' src/components/call/CallProvider.tsx
+          grep -q 'SOCIALBIRD_CALL_SYSTEM_V5: cold-start-user-id-defer' src/components/call/CallProvider.tsx
+          grep -q 'SOCIALBIRD_CALL_SYSTEM_V5: native-state-follows-real-phase' src/components/call/CallProvider.tsx
           grep -q 'SOCIALBIRD_CALL_SYSTEM_V5: camera-renegotiation' src/components/call/CallProvider.tsx
           grep -q 'SOCIALBIRD_CALL_SYSTEM_V5: participant-volume-slider' src/components/GlobalCallOverlay.tsx
           grep -q 'SOCIALBIRD_CALL_SYSTEM_V5: resilient-remote-video' src/components/GlobalCallOverlay.tsx
