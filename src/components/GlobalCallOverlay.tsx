@@ -61,6 +61,10 @@ const GlobalCallOverlay = () => {
   const syncFromWindow = () => {
     const state = (window as CallWindow).__itbirdActiveCallState || null;
     setCall(state ? { ...state } : null);
+    if (!state) {
+      setMinimized(false);
+      setRemoteStreams({});
+    }
   };
 
   useEffect(() => {
@@ -68,6 +72,7 @@ const GlobalCallOverlay = () => {
       const detail = (event as CustomEvent<CallState>).detail || {};
       const state = (window as CallWindow).__itbirdActiveCallState;
       setCall({ ...(state || {}), ...detail });
+      setMinimized(false);
     };
     const onState = () => syncFromWindow();
     const onRemote = (event: Event) => {
