@@ -34,6 +34,63 @@ const oldAuth = '    socket.onopen = () => socket.send(JSON.stringify({ type: "A
 const callHostAuth = '    socket.onopen = () => socket.send(JSON.stringify({ type: "AUTH", token, clientRole: "call-host" }));';
 if (provider.includes(oldAuth)) provider = provider.replace(oldAuth, callHostAuth);
 
+// Prevent INVITE + replayed OFFER from starting two simultaneous accept/getUserMedia
+// flows while Android is waking from a push notification.
+const acceptingMarker = '// SOCIALBIRD_CALL_SYSTEM_V4: accept-transition-lock';
+if (!provider.includes(acceptingMarker)) {
+  const refAnchor = '  const autoAnswerRef = useRef(false);';
+  if (!provider.includes(refAnchor)) throw new Error('Call system V4 patch failed: accept lock ref anchor');
+  provider = provider.replace(
+    refAnchor,
+    `${refAnchor}\n  ${acceptingMarker}\n  const acceptingRef = useRef(false);\n  const startingRef = useRef(false);`,
+  );
+
+  const startAnchor = `  const startCall = useCallback(async (input: StartCallInput) => {\n    if (callRef.current || incomingRef.current) {`;
+  const startReplacement = `  const startCall = useCallback(async (input: StartCallInput) => {\n    if (startingRef.current) return;\n    if (callRef.current || incomingRef.current) {`;
+  if (!provider.includes(startAnchor)) throw new Error('Call system V4 patch failed: start lock anchor');
+  provider = provider.replace(startAnchor, startReplacement);
+
+  const startTry = `    try {\n      const stream = await ensureLocalMedia(input.kind, "user");`;
+  const startTryReplacement = `    startingRef.current = true;\n    try {\n      const stream = await ensureLocalMedia(input.kind, "user");`;
+  if (!provider.includes(startTry)) throw new Error('Call system V4 patch failed: start lock try');
+  provider = provider.replace(startTry, startTryReplacement);
+
+  const startCatch = `    } catch (error) {\n      finishCallLocally("start-error");\n      toast.error(error instanceof Error ? error.message : "Не удалось начать звонок");\n    }\n  }, [ensureLocalMedia, finishCallLocally, makeOffer, publishActive, sendSignal]);`;
+  const startCatchReplacement = `    } catch (error) {\n      finishCallLocally("start-error");\n      toast.error(error instanceof Error ? error.message : "Не удалось начать звонок");\n    } finally {\n      startingRef.current = false;\n    }\n  }, [ensureLocalMedia, finishCallLocally, makeOffer, publishActive, sendSignal]);`;
+  if (!provider.includes(startCatch)) throw new Error('Call system V4 patch failed: start lock finally');
+  provider = provider.replace(startCatch, startCatchReplacement);
+
+  const acceptAnchor = `  const acceptIncoming = useCallback(async () => {\n    const invite = incomingRef.current;\n    if (!invite) {\n      autoAnswerRef.current = true;\n      return;\n    }`;
+  const acceptReplacement = `  const acceptIncoming = useCallback(async () => {\n    const invite = incomingRef.current;\n    if (!invite) {\n      autoAnswerRef.current = true;\n      return;\n    }\n    if (acceptingRef.current) return;\n    acceptingRef.current = true;`;
+  if (!provider.includes(acceptAnchor)) throw new Error('Call system V4 patch failed: accept lock anchor');
+  provider = provider.replace(acceptAnchor, acceptReplacement);
+
+  const acceptCatch = `    } catch (error) {\n      finishCallLocally("accept-error");\n      toast.error(error instanceof Error ? error.message : "Не удалось принять звонок");\n    }\n  }, [ensureLocalMedia, finishCallLocally, handleOffer, makeOffer, publishActive, sendSignal, stopRingtone]);`;
+  const acceptCatchReplacement = `    } catch (error) {\n      finishCallLocally("accept-error");\n      toast.error(error instanceof Error ? error.message : "Не удалось принять звонок");\n    } finally {\n      acceptingRef.current = false;\n    }\n  }, [ensureLocalMedia, finishCallLocally, handleOffer, makeOffer, publishActive, sendSignal, stopRingtone]);`;
+  if (!provider.includes(acceptCatch)) throw new Error('Call system V4 patch failed: accept lock finally');
+  provider = provider.replace(acceptCatch, acceptCatchReplacement);
+}
+
+// A CALL_ACCEPT after mobile wake must supersede an unanswered stale local offer.
+// iceRestart=true makes makeOffer rollback have-local-offer and send a fresh offer.
+const renegotiationMarker = '// SOCIALBIRD_CALL_SYSTEM_V4: fresh-offer-after-accept';
+if (!provider.includes(renegotiationMarker)) {
+  const oldAccept = `      if (!peersRef.current[peerId] || !peersRef.current[peerId].pc.remoteDescription) {\n        if (selfId < peerId || active.direction === "outgoing") await makeOffer(peerId);\n      }`;
+  const newAccept = `      if (!peersRef.current[peerId] || !peersRef.current[peerId].pc.remoteDescription) {\n        ${renegotiationMarker}\n        if (selfId < peerId || active.direction === "outgoing") await makeOffer(peerId, true);\n      }`;
+  if (!provider.includes(oldAccept)) throw new Error('Call system V4 patch failed: fresh offer anchor');
+  provider = provider.replace(oldAccept, newAccept);
+}
+
+// Ignore late signals from an older call so a delayed HANGUP/SCREEN/ANSWER cannot
+// damage a newly-established call in the same chat.
+const staleMarker = '// SOCIALBIRD_CALL_SYSTEM_V4: stale-call-signal-guard';
+if (!provider.includes(staleMarker)) {
+  const anchor = `    if (Array.isArray(signal.targetIds) && !signal.targetIds.map(Number).includes(selfId)) return;\n\n    if (type === "CALL_INVITE") {`;
+  const guarded = `    if (Array.isArray(signal.targetIds) && !signal.targetIds.map(Number).includes(selfId)) return;\n\n    ${staleMarker}\n    if (type !== "CALL_INVITE") {\n      const relevant = callRef.current || incomingRef.current;\n      if (relevant) {\n        if (relevant.callId && signal.callId && relevant.callId !== signal.callId) return;\n        if (String(relevant.chatId) !== String(signal.chatId) || relevant.mode !== signal.mode) return;\n      }\n    }\n\n    if (type === "CALL_INVITE") {`;
+  if (!provider.includes(anchor)) throw new Error('Call system V4 patch failed: stale signal guard anchor');
+  provider = provider.replace(anchor, guarded);
+}
+
 const nativeRuntimeMarker = '// SOCIALBIRD_CALL_SYSTEM_V4: legacy-native-answer-event';
 if (!provider.includes(nativeRuntimeMarker)) {
   const anchor = `  }, [acceptIncoming, declineIncoming]);\n\n  useEffect(() => {\n    const timer = window.setInterval(() => {`;
@@ -123,9 +180,14 @@ if (!server.includes(refsMarker)) {
 }
 
 const replayMarker = '// SOCIALBIRD_CALL_SYSTEM_V4: call-host-replay';
-if (!server.includes(replayMarker) && !server.includes('NATIVE_ANDROID: durable-call-replay-owner')) {
+const nativeReplayMarker = '// NATIVE_ANDROID: durable-call-replay-owner';
+const nestedReplay = `                ${replayMarker}\n                if (ws.clientRole === 'call-host') {\n                    ${nativeReplayMarker}\n                if (ws.clientRole === 'call-host') {\n                    void deliverPendingCallSignals(decoded.id, ws);\n                }\n                }`;
+const normalizedReplay = `                ${replayMarker}\n                ${nativeReplayMarker}\n                if (ws.clientRole === 'call-host') {\n                    void deliverPendingCallSignals(decoded.id, ws);\n                }`;
+if (server.includes(nestedReplay)) server = server.replace(nestedReplay, normalizedReplay);
+
+if (!server.includes(replayMarker) && !server.includes(nativeReplayMarker)) {
   const legacyReplay = `                // SOCIAL_NEXT: replay-offline-call-signals\n                void deliverPendingCallSignals(decoded.id, ws);`;
-  const guarded = `                ${replayMarker}\n                if (ws.clientRole === 'call-host') {\n                    void deliverPendingCallSignals(decoded.id, ws);\n                }`;
+  const guarded = `                ${replayMarker}\n                ${nativeReplayMarker}\n                if (ws.clientRole === 'call-host') {\n                    void deliverPendingCallSignals(decoded.id, ws);\n                }`;
   if (server.includes(legacyReplay)) {
     server = server.replace(legacyReplay, guarded);
   } else {
@@ -199,6 +261,9 @@ for (const expected of [
   'itbird-native-answer-call',
   'clientRole: "call-host"',
   'createSpeakingMonitor',
+  acceptingMarker,
+  renegotiationMarker,
+  staleMarker,
 ]) {
   if (!provider.includes(expected)) throw new Error(`Call system V4 provider verification failed: ${expected}`);
 }
@@ -219,8 +284,9 @@ if (!realtime.includes(realtimeMarker)) throw new Error('Call system V4 realtime
 if (!server.includes('registerOfflineCallQueue') || !server.includes('queueOfflineCallSignal(payload.type')) {
   throw new Error('Call system V4 durable backend queue wiring missing');
 }
+if (server.includes(nestedReplay)) throw new Error('Call system V4 nested replay guard was not normalized');
 if (!queue.includes(durableMarker) || !queue.includes(cleanupMarker)) {
   throw new Error('Call system V4 durable queue policy missing');
 }
 
-console.log('Call system V4 applied: one CallProvider owns signaling/media, Android/PWA answers converge into it, legacy queue patches migrate without duplication, mobile INVITE/OFFER/ICE are durable and legacy RealtimeNotifications CALL_* handling is disabled.');
+console.log('Call system V4 applied: one CallProvider owns signaling/media, push-answer uses fresh renegotiation and transition locks, stale call signals are rejected, Android/PWA answers converge into it, legacy queue patches migrate without duplication, mobile INVITE/OFFER/ICE are durable and legacy RealtimeNotifications CALL_* handling is disabled.');
