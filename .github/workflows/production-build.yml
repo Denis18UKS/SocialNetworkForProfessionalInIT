@@ -36,46 +36,27 @@ jobs:
             package-lock.json
             backend/package-lock.json
 
-      - name: Apply application, mobile, media, call, native push, SEO and compiler fixes
+      - name: Apply current production wiring
         run: |
-          node deploy/apply-app-fixes.mjs
-          node deploy/apply-mobile-layout-fixes.mjs
-          node deploy/apply-mobile-call-audio-fixes.mjs
-          node deploy/apply-call-reliability-fixes.mjs
-          node deploy/apply-call-mobile-upload-fixes.mjs
-          node deploy/apply-call-video-mount-fix.mjs
+          # Call System V4 is canonical. Do not run the retired call patchers here:
+          # apply-app-fixes call section, mobile-call-audio, call-reliability,
+          # call-mobile-upload, call-video-mount, screen-share-audio,
+          # mobile-call-delivery, call-hangup-lifecycle or single-camera-tile.
           node deploy/apply-mail-recovery-fixes.mjs
-          node deploy/apply-social-next-v2.mjs
-          node deploy/apply-screen-share-audio-fixes.mjs
-          node deploy/apply-mobile-call-delivery-fix.mjs
-          node deploy/apply-call-hangup-lifecycle-fix.mjs
-          node deploy/apply-mobile-ui-media-fixes.mjs
-          node deploy/apply-single-camera-tile-fix.mjs
           node deploy/apply-chat-media-mobile-fix.mjs
           node deploy/apply-chat-media-backend-fix.mjs
           node deploy/apply-native-android-integration.mjs
           node deploy/apply-native-fcm-push.mjs
+          node deploy/apply-call-system-v4.mjs
           node deploy/apply-seo-fixes.mjs
           node deploy/harden-source.mjs --in-place
           node deploy/enable-sandbox-compiler.mjs --in-place
           node deploy/patch-installer.mjs
 
-      - name: Check generated backend, media/native push helpers and installer syntax
+      - name: Check generated source and V4 invariants
         run: |
-          node --check deploy/apply-app-fixes.mjs
-          node --check deploy/apply-mobile-layout-fixes.mjs
-          node --check deploy/apply-mobile-call-audio-fixes.mjs
-          node --check deploy/apply-call-reliability-fixes.mjs
-          node --check deploy/apply-call-mobile-upload-fixes.mjs
-          node --check deploy/apply-call-video-mount-fix.mjs
+          node --check deploy/apply-call-system-v4.mjs
           node --check deploy/apply-mail-recovery-fixes.mjs
-          node --check deploy/apply-social-next-fixes.mjs
-          node --check deploy/apply-social-next-v2.mjs
-          node --check deploy/apply-screen-share-audio-fixes.mjs
-          node --check deploy/apply-mobile-call-delivery-fix.mjs
-          node --check deploy/apply-call-hangup-lifecycle-fix.mjs
-          node --check deploy/apply-mobile-ui-media-fixes.mjs
-          node --check deploy/apply-single-camera-tile-fix.mjs
           node --check deploy/apply-chat-media-mobile-fix.mjs
           node --check deploy/apply-chat-media-backend-fix.mjs
           node --check deploy/apply-native-android-integration.mjs
@@ -99,34 +80,22 @@ jobs:
           node --check deploy/enable-sandbox-compiler.mjs
           node --check deploy/patch-installer.mjs
           bash -n deploy/install.sh
-          bash -n deploy/update-live-call-mobile-upload.sh
           bash -n deploy/update-mail-recovery.sh
-          bash -n deploy/update-social-next.sh
-          bash -n deploy/update-screen-share.sh
-          bash -n deploy/update-mobile-call-delivery.sh
-          bash -n deploy/update-call-hangup-lifecycle.sh
-          bash -n deploy/update-mobile-ui-media.sh
-          bash -n deploy/update-single-camera-tile.sh
           bash -n deploy/update-android-app.sh
           bash -n deploy/update-native-android-complete.sh
           bash -n deploy/update-native-parity-seo.sh
           bash -n deploy/update-chat-media-native-push.sh
           bash -n deploy/configure-fcm-server.sh
           bash -n deploy/configure-mail.sh
-          node deploy/apply-call-mobile-upload-fixes.mjs
-          node deploy/apply-call-video-mount-fix.mjs
-          node deploy/apply-mail-recovery-fixes.mjs
-          node deploy/apply-social-next-v2.mjs
-          node deploy/apply-screen-share-audio-fixes.mjs
-          node deploy/apply-mobile-call-delivery-fix.mjs
-          node deploy/apply-call-hangup-lifecycle-fix.mjs
-          node deploy/apply-mobile-ui-media-fixes.mjs
-          node deploy/apply-single-camera-tile-fix.mjs
-          node deploy/apply-chat-media-mobile-fix.mjs
-          node deploy/apply-chat-media-backend-fix.mjs
-          node deploy/apply-native-android-integration.mjs
-          node deploy/apply-native-fcm-push.mjs
-          node deploy/apply-seo-fixes.mjs
+          grep -q 'export const CallProvider' src/components/call/CallProvider.tsx
+          grep -q 'clientRole: "call-host"' src/components/call/CallProvider.tsx
+          grep -q 'CALL_SCREEN_START' src/components/call/CallProvider.tsx
+          grep -q 'switchCamera' src/components/call/CallProvider.tsx
+          grep -q 'itbird-native-answer-call' src/components/call/CallProvider.tsx
+          grep -q 'Перевернуть камеру' src/components/GlobalCallOverlay.tsx
+          grep -q 'Говорит' src/components/GlobalCallOverlay.tsx
+          grep -q 'SOCIALBIRD_CALL_SYSTEM_V4: CallProvider owns CALL_\* signalling' src/components/RealtimeNotifications.tsx
+          grep -q '<CallProvider>' src/App.tsx
           node deploy/harden-source.mjs
           node deploy/enable-sandbox-compiler.mjs
           node --check backend/server.production.js
@@ -145,7 +114,7 @@ jobs:
           VITE_TURN_USERNAME: socialbird
           VITE_TURN_CREDENTIAL: ci-placeholder-only
 
-      - name: Verify SEO and mobile media artifacts
+      - name: Verify production artifacts
         run: |
           test -s dist/robots.txt
           test -s dist/sitemap.xml
@@ -206,6 +175,10 @@ jobs:
             src/components/SeoManager.tsx \
             src/components/RealtimeNotifications.tsx \
             src/components/VoiceCallControls.tsx \
+            src/components/GlobalCallOverlay.tsx \
+            src/components/call/CallProvider.tsx \
+            src/components/call/NativeCallAudioBridge.tsx \
+            src/components/call/PushCallDeepLinkBridge.tsx \
             src/components/VoiceMessageBubble.tsx \
             src/components/PasswordRecovery.tsx \
             src/pages/AndroidApp.tsx \
@@ -219,6 +192,6 @@ jobs:
             src/pages/Chats.tsx \
             src/pages/GroupChats.tsx
           if ! git diff --cached --quiet; then
-            git commit -m "Apply generated production media, Android FCM, SEO and call fixes"
+            git commit -m "Apply generated production V4 call and platform fixes"
             git push origin HEAD:${GITHUB_REF_NAME}
           fi
