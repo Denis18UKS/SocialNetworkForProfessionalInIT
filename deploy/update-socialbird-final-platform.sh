@@ -27,9 +27,9 @@ mkdir -p "$BACKUP_ROOT" "$BACKUP_DIR"
 BACKUP_FILES=(
   backend/server.js backend/server.production.js
   src/App.tsx src/components/VoiceCallControls.tsx src/components/AppSidebar.tsx
-  src/lib/call-audio-reliability.ts
-  src/pages/GroupChats.tsx src/pages/Users.tsx src/pages/Settings.tsx
-  src/pages/CinemaPartyRoom.tsx src/styles/chat-platform-v1.css
+  src/components/CinemaQrScanner.tsx src/lib/call-audio-reliability.ts src/lib/cinema-upload.ts
+  src/pages/GroupChats.tsx src/pages/Users.tsx src/pages/Settings.tsx src/pages/Login.tsx
+  src/pages/CinemaParty.tsx src/pages/CinemaPartyRoom.tsx src/styles/chat-platform-v1.css
 )
 for f in "${BACKUP_FILES[@]}"; do
   if [[ -f "$f" ]]; then mkdir -p "$BACKUP_DIR/$(dirname "$f")"; cp -a "$f" "$BACKUP_DIR/$f"; fi
@@ -68,10 +68,10 @@ sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   backend/socialbird-final-platform.js backend/strict-privacy-gate.js backend/stable-news-time.js \
   backend/cinema-qr.js backend/cinema-stream.js backend/admin-cinema-library.js \
   src/App.tsx src/components/VoiceCallControls.tsx src/components/GlobalCallOverlay.tsx \
-  src/components/StrictUserProfileRoute.tsx src/components/AppSidebar.tsx \
-  src/lib/call-audio-reliability.ts \
-  src/pages/EmailChange.tsx src/pages/ChatFolders.tsx src/pages/CinemaParty.tsx src/pages/CinemaPartyRoom.tsx \
-  src/pages/CinemaTitle.tsx src/pages/CinemaPerson.tsx src/lib/cinema-upload.ts \
+  src/components/StrictUserProfileRoute.tsx src/components/AppSidebar.tsx src/components/CinemaQrScanner.tsx \
+  src/lib/call-audio-reliability.ts src/lib/cinema-upload.ts \
+  src/pages/Login.tsx src/pages/EmailChange.tsx src/pages/ChatFolders.tsx src/pages/CinemaParty.tsx src/pages/CinemaPartyRoom.tsx \
+  src/pages/CinemaTitle.tsx src/pages/CinemaPerson.tsx \
   deploy/apply-global-call-overlay-v1.mjs deploy/apply-socialbird-final-runtime-v1.mjs \
   deploy/harden-source.mjs deploy/enable-sandbox-compiler.mjs
 
@@ -82,6 +82,8 @@ require_text backend/socialbird-final-platform.js "videoRecompression: false" "o
 require_text backend/strict-privacy-gate.js "profile_restricted: true" "strict profile privacy"
 require_text backend/admin-cinema-library.js "registerAdminCinemaLibrary" "Admin C-Party library API"
 require_text backend/admin-cinema-library.js "DISK_RESERVE_BYTES" "safe cinema disk guard"
+require_text src/lib/cinema-upload.ts "MAX_PARALLEL_CHUNKS = 4" "parallel C-Party uploads"
+require_text src/components/CinemaQrScanner.tsx "BarcodeDetector" "in-app C-Party QR scanner"
 require_text src/components/VoiceCallControls.tsx "CALL_RELIABILITY: persistent-audio-and-health" "canonical v4 call reliability source"
 require_text src/components/VoiceCallControls.tsx "APP_FIX: removable-screen-track" "canonical v4 screen sharing source"
 
@@ -96,6 +98,9 @@ require_text src/App.tsx "<GlobalCallOverlay />" "global call overlay"
 require_text src/pages/GroupChats.tsx "messages/all-v2" "creator clear-all UI"
 require_text src/pages/Users.tsx "disabled={Boolean(user.restricted || user.profile_restricted)}" "restricted card actions disabled"
 require_text src/pages/Settings.tsx "Сменить email с подтверждением" "email change in settings"
+require_text src/pages/CinemaParty.tsx "Сканировать QR" "C-Party QR scanner wired"
+require_text src/pages/CinemaPartyRoom.tsx "SOCIALBIRD_CPARTY_INVITE_V1: reauth-return" "C-Party invite reauthentication"
+require_text src/pages/Login.tsx "navigate(safeReturnTo" "login returns to C-Party invite"
 
 echo "[4/10] Preparing C-Party storage"
 install -d -o "$APP_USER" -g "$APP_USER" -m 0750 backend/uploads/cinema_chunks backend/uploads/cinema_media
@@ -162,5 +167,5 @@ chown -R "$APP_USER:$APP_USER" backend src dist 2>/dev/null || true
 
 echo
 echo "SocialBIRD final platform deployed successfully."
-echo "Included: global persistent calls/fullscreen streams, strict profiles, remove-friend flow, chat folders, verified email change, creator-only group clear, stable news time, C-Party and Admin Cinema Library uploads."
+echo "Included: global persistent calls/fullscreen streams, strict profiles, remove-friend flow, chat folders, verified email change, creator-only group clear, stable news time, C-Party QR scanner/invite reauth, faster uploads and Admin Cinema Library uploads."
 echo "Backup: $BACKUP_DIR"
