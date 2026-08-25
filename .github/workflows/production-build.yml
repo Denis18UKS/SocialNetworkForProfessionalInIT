@@ -38,24 +38,25 @@ jobs:
 
       - name: Apply current production wiring
         run: |
-          # Call System V4 is canonical. Do not run the retired call patchers here:
-          # apply-app-fixes call section, mobile-call-audio, call-reliability,
-          # call-mobile-upload, call-video-mount, screen-share-audio,
-          # mobile-call-delivery, call-hangup-lifecycle or single-camera-tile.
+          # Call System V4 is the base owner; V5 extends that single manager with
+          # reliable push-answer, real connected-state, camera resync and per-user volume.
+          # Retired parallel call patchers must stay disabled.
           node deploy/apply-mail-recovery-fixes.mjs
           node deploy/apply-chat-media-mobile-fix.mjs
           node deploy/apply-chat-media-backend-fix.mjs
           node deploy/apply-native-android-integration.mjs
           node deploy/apply-native-fcm-push.mjs
           node deploy/apply-call-system-v4.mjs
+          node deploy/apply-call-system-v5.mjs
           node deploy/apply-seo-fixes.mjs
           node deploy/harden-source.mjs --in-place
           node deploy/enable-sandbox-compiler.mjs --in-place
           node deploy/patch-installer.mjs
 
-      - name: Check generated source and V4 invariants
+      - name: Check generated source and V5 invariants
         run: |
           node --check deploy/apply-call-system-v4.mjs
+          node --check deploy/apply-call-system-v5.mjs
           node --check deploy/apply-mail-recovery-fixes.mjs
           node --check deploy/apply-chat-media-mobile-fix.mjs
           node --check deploy/apply-chat-media-backend-fix.mjs
@@ -90,8 +91,13 @@ jobs:
           grep -q 'export const CallProvider' src/components/call/CallProvider.tsx
           grep -q 'clientRole: "call-host"' src/components/call/CallProvider.tsx
           grep -q 'CALL_SCREEN_START' src/components/call/CallProvider.tsx
-          grep -q 'switchCamera' src/components/call/CallProvider.tsx
-          grep -q 'itbird-native-answer-call' src/components/call/CallProvider.tsx
+          grep -q 'CALL_CAMERA_RESYNC' src/components/call/CallProvider.tsx
+          grep -q 'setParticipantVolume' src/components/call/CallProvider.tsx
+          grep -q 'SOCIALBIRD_CALL_SYSTEM_V5: defer-answer-until-ready' src/components/call/CallProvider.tsx
+          grep -q 'SOCIALBIRD_CALL_SYSTEM_V5: real-webrtc-connected-state' src/components/call/CallProvider.tsx
+          grep -q 'SOCIALBIRD_CALL_SYSTEM_V5: camera-renegotiation' src/components/call/CallProvider.tsx
+          grep -q 'SOCIALBIRD_CALL_SYSTEM_V5: participant-volume-slider' src/components/GlobalCallOverlay.tsx
+          grep -q 'SOCIALBIRD_CALL_SYSTEM_V5: resilient-remote-video' src/components/GlobalCallOverlay.tsx
           grep -q 'Перевернуть камеру' src/components/GlobalCallOverlay.tsx
           grep -q 'Говорит' src/components/GlobalCallOverlay.tsx
           grep -q 'SOCIALBIRD_CALL_SYSTEM_V4: CallProvider owns CALL_\* signalling' src/components/RealtimeNotifications.tsx
@@ -192,6 +198,6 @@ jobs:
             src/pages/Chats.tsx \
             src/pages/GroupChats.tsx
           if ! git diff --cached --quiet; then
-            git commit -m "Apply generated production V4 call and platform fixes"
+            git commit -m "Apply generated production V5 call and platform fixes"
             git push origin HEAD:${GITHUB_REF_NAME}
           fi
