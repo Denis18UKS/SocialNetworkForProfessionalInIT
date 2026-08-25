@@ -103,6 +103,39 @@ const patchSettings = () => {
   write(file, source);
 };
 
+const patchCinemaParty = () => {
+  const file = 'src/pages/CinemaParty.tsx';
+  let source = read(file);
+  const marker = '// SOCIALBIRD_CPARTY_QR_V1: in-app-scanner';
+  if (source.includes(marker)) return;
+
+  source = replaceOnce(
+    source,
+    'C-Party QR icon import',
+    'import { Clapperboard, Film, LockKeyhole, Play, Plus, Search, Upload, Users } from "lucide-react";',
+    'import { Clapperboard, Film, LockKeyhole, Play, Plus, QrCode, Search, Upload, Users } from "lucide-react";',
+  );
+  source = replaceOnce(
+    source,
+    'C-Party QR scanner import',
+    'import { uploadCinemaVideo } from "@/lib/cinema-upload";',
+    `import { uploadCinemaVideo } from "@/lib/cinema-upload";\nimport CinemaQrScanner from "@/components/CinemaQrScanner";\n${marker}`,
+  );
+  source = replaceOnce(
+    source,
+    'C-Party QR state',
+    '  const [busy, setBusy] = useState(false);',
+    '  const [busy, setBusy] = useState(false);\n  const [scannerOpen, setScannerOpen] = useState(false);',
+  );
+
+  const headerAnchor = '        <Button onClick={() => setTab("create")} className="gap-2"><Plus className="h-4 w-4" />Создать комнату</Button>\n      </div>\n\n      <div className="flex gap-2 overflow-x-auto pb-1">';
+  const headerBlock = '        <div className="flex flex-wrap gap-2">\n          <Button variant="outline" onClick={() => setScannerOpen((current) => !current)} className="gap-2"><QrCode className="h-4 w-4" />Сканировать QR</Button>\n          <Button onClick={() => setTab("create")} className="gap-2"><Plus className="h-4 w-4" />Создать комнату</Button>\n        </div>\n      </div>\n\n      <CinemaQrScanner open={scannerOpen} onClose={() => setScannerOpen(false)} onDetected={(path) => { setScannerOpen(false); navigate(path); }} />\n\n      <div className="flex gap-2 overflow-x-auto pb-1">';
+  source = replaceOnce(source, 'C-Party QR scanner controls', headerAnchor, headerBlock);
+
+  if (!source.includes('<CinemaQrScanner') || !source.includes('Сканировать QR')) throw new Error('C-Party QR scanner verification failed');
+  write(file, source);
+};
+
 const patchCinemaRoom = () => {
   const file = 'src/pages/CinemaPartyRoom.tsx';
   let source = read(file);
@@ -110,6 +143,44 @@ const patchCinemaRoom = () => {
   const good = '      video.src = `${api}/cinema/stream/${roomId}?${invite ? `invite=${encodeURIComponent(invite)}&` : ""}t=${Date.now()}`;';
   if (source.includes(bad)) source = source.replace(bad, good);
   if (!source.includes(good)) throw new Error('Cinema episode stream URL verification failed');
+
+  const authMarker = '// SOCIALBIRD_CPARTY_INVITE_V1: reauth-return';
+  if (!source.includes(authMarker)) {
+    const authAnchor = '    const data = await response.json().catch(() => ({}));\n    if (!response.ok) throw new Error(data?.message || "Не удалось открыть комнату");';
+    const authBlock = '    const data = await response.json().catch(() => ({}));\n    ' + authMarker + '\n    if (response.status === 401) {\n      localStorage.removeItem("token");\n      localStorage.removeItem("role");\n      const returnTo = `/c-party/room/${roomId}${inviteFromUrl ? `?invite=${encodeURIComponent(inviteFromUrl)}` : ""}`;\n      navigate(`/login?returnTo=${encodeURIComponent(returnTo)}`, { replace: true });\n      throw new Error("Сессия входа истекла. После входа вы автоматически вернётесь в комнату.");\n    }\n    if (!response.ok) throw new Error(data?.message || "Не удалось открыть комнату");';
+    source = replaceOnce(source, 'C-Party expired JWT return flow', authAnchor, authBlock);
+  }
+
+  if (!source.includes(authMarker)) throw new Error('C-Party invite authentication verification failed');
+  write(file, source);
+};
+
+const patchLoginReturnTo = () => {
+  const file = 'src/pages/Login.tsx';
+  let source = read(file);
+  const marker = '// SOCIALBIRD_CPARTY_INVITE_V1: login-return';
+  if (source.includes(marker)) return;
+
+  source = replaceOnce(
+    source,
+    'login useLocation import',
+    'import { useNavigate } from "react-router-dom";',
+    'import { useLocation, useNavigate } from "react-router-dom";',
+  );
+  source = replaceOnce(
+    source,
+    'login return target',
+    '  const navigate = useNavigate();\n  const { toast } = useToast();',
+    '  const navigate = useNavigate();\n  const location = useLocation();\n  const returnToParam = new URLSearchParams(location.search).get("returnTo");\n  const safeReturnTo = returnToParam && returnToParam.startsWith("/") && !returnToParam.startsWith("//") ? returnToParam : null;\n  ' + marker + '\n  const { toast } = useToast();',
+  );
+  source = replaceOnce(
+    source,
+    'login navigate back to invite',
+    '        if (data.user.role === "admin") {\n          navigate("/admin/users");\n        } else {\n          navigate("/profile");\n        }',
+    '        if (safeReturnTo) {\n          navigate(safeReturnTo, { replace: true });\n        } else if (data.user.role === "admin") {\n          navigate("/admin/users");\n        } else {\n          navigate("/profile");\n        }',
+  );
+
+  if (!source.includes(marker) || !source.includes('navigate(safeReturnTo')) throw new Error('Login return-to invite verification failed');
   write(file, source);
 };
 
@@ -117,6 +188,8 @@ patchServer();
 patchGroupChats();
 patchUsers();
 patchSettings();
+patchCinemaParty();
 patchCinemaRoom();
+patchLoginReturnTo();
 
-console.log('SocialBIRD final runtime patch applied: backend wiring, creator clear, restricted cards, email settings, C-Party episode URLs and Admin Cinema Library are current.');
+console.log('SocialBIRD final runtime patch applied: backend wiring, creator clear, restricted cards, email settings, C-Party QR/invite flow, episode URLs and Admin Cinema Library are current.');
