@@ -23,6 +23,7 @@ sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   deploy/apply-cparty-participant-media-reload-v2.mjs \
   deploy/apply-global-call-overlay-v3.mjs \
   src/components/RealtimeNotifications.tsx \
+  src/main.tsx src/lib/offline.ts public/sw.js public/manifest.webmanifest \
   backend/cinema-transcode-worker.js
 node --check deploy/apply-cinema-unrestricted-storage.mjs
 node --check deploy/apply-cinema-format-normalization-v1.mjs
@@ -31,9 +32,13 @@ node --check deploy/apply-cinema-upload-compat-v1.mjs
 node --check deploy/apply-cparty-session-media-change-v1.mjs
 node --check deploy/apply-cparty-participant-media-reload-v2.mjs
 node --check deploy/apply-global-call-overlay-v3.mjs
+node --check public/sw.js
 node --check backend/cinema-transcode-worker.js
+grep -Fq 'SOCIALBIRD_OFFLINE_V1: client-bootstrap' src/lib/offline.ts
+grep -Fq 'installOfflineSupport();' src/main.tsx
+grep -Fq 'SOCIALBIRD_OFFLINE_V1: shell-and-private-api-cache' public/sw.js
 
-# SOCIALBIRD_UNRESTRICTED_DEPLOY_V6
+# SOCIALBIRD_UNRESTRICTED_DEPLOY_V7
 # Remove only the artificial pre-deploy free-space gate. All normal build,
 # verification, rollback, nginx, PM2 and smoke-test checks stay enabled.
 awk '
@@ -48,7 +53,7 @@ skipping { next }
 # Extend the normal updater without modifying its safety/rollback behavior.
 awk '
 /^echo "\[2\/10\] Checking modules"/ {
-  print "sudo -u \"$APP_USER\" git checkout \"origin/$BRANCH\" -- src/components/RealtimeNotifications.tsx"
+  print "sudo -u \"$APP_USER\" git checkout \"origin/$BRANCH\" -- src/components/RealtimeNotifications.tsx src/main.tsx src/lib/offline.ts public/sw.js public/manifest.webmanifest"
   print "if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then"
   print "  export DEBIAN_FRONTEND=noninteractive"
   print "  apt-get update -qq"
@@ -62,6 +67,7 @@ awk '
   print "sudo -u \"$APP_USER\" node deploy/apply-cinema-unrestricted-storage.mjs"
   print "node --check backend/admin-cinema-library.js"
   print "node --check backend/cinema-transcode-worker.js"
+  print "node --check public/sw.js"
 }
 /sudo -u "\$APP_USER" node deploy\/apply-global-call-overlay-v1\.mjs/ {
   print "sudo -u \"$APP_USER\" node deploy/apply-global-call-overlay-v3.mjs"
@@ -87,5 +93,6 @@ echo "Older Admin Desktop clients remain upload-compatible during background con
 echo "C-Party custom-upload rooms can switch video during an active session."
 echo "C-Party participants force-reload the new media source in realtime and via polling fallback."
 echo "Accepted incoming calls use the persistent GlobalCallOverlay V3."
+echo "SocialBIRD offline shell/static/private-API cache support enabled."
 df -h "$APP_DIR" || true
 exec bash "$TMP2"
