@@ -193,7 +193,10 @@ wss.on('connection', (ws) => {
                 addOnlineSocket(decoded.id, ws);
                 // SOCIALBIRD_CALL_SYSTEM_V4: call-host-replay
                 if (ws.clientRole === 'call-host') {
+                    // NATIVE_ANDROID: durable-call-replay-owner
+                if (ws.clientRole === 'call-host') {
                     void deliverPendingCallSignals(decoded.id, ws);
+                }
                 }
                 ws.send(JSON.stringify({ type: 'ONLINE_USERS', data: { userIds: getOnlineUserIds() } }));
                 notifyClients({
