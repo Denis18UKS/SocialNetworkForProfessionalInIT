@@ -51,10 +51,11 @@ const CinemaParty = () => {
   const [busy, setBusy] = useState(false);
 
   const load = async () => {
+    const refreshKey = Date.now();
     const [roomsResponse, mineResponse, libraryResponse] = await Promise.all([
-      fetch(`${api}/cinema/rooms`, { headers }),
-      fetch(`${api}/cinema/rooms?mine=1`, { headers }),
-      fetch(`${api}/cinema/library`, { headers }),
+      fetch(`${api}/cinema/rooms?_=${refreshKey}`, { headers, cache: "no-store" }),
+      fetch(`${api}/cinema/rooms?mine=1&_=${refreshKey}`, { headers, cache: "no-store" }),
+      fetch(`${api}/cinema/library?_=${refreshKey}`, { headers, cache: "no-store" }),
     ]);
     if (roomsResponse.ok) setRooms(await roomsResponse.json());
     if (mineResponse.ok) setMine(await mineResponse.json());
@@ -62,6 +63,25 @@ const CinemaParty = () => {
   };
 
   useEffect(() => { void load(); }, []);
+
+  // SOCIALBIRD_CPARTY_PUBLIC_ROOMS_V1: live-refresh
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState !== "hidden") void load();
+    };
+    const timer = window.setInterval(refresh, 3000);
+    window.addEventListener("focus", refresh);
+    window.addEventListener("pageshow", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    window.addEventListener("itbird-cinema-room-changed", refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener("pageshow", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+      window.removeEventListener("itbird-cinema-room-changed", refresh);
+    };
+  }, []);
 
   const filteredLibrary = useMemo(() => library.filter((item) => !query || `${item.title} ${item.genres || ""}`.toLowerCase().includes(query.toLowerCase())), [library, query]);
 
@@ -95,6 +115,7 @@ const CinemaParty = () => {
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data?.message || "Не удалось создать комнату");
+      window.dispatchEvent(new CustomEvent("itbird-cinema-room-changed", { detail: { roomId: data.id, visibility } }));
       navigate(`/c-party/room/${data.id}?invite=${data.inviteToken}`);
     } catch (error) {
       window.alert(error instanceof Error ? error.message : "Не удалось создать комнату");
@@ -130,9 +151,9 @@ const CinemaParty = () => {
       </div>
 
       <div className="flex gap-2 overflow-x-auto pb-1">
-        <Button variant={tab === "rooms" ? "default" : "outline"} onClick={() => setTab("rooms")} className="shrink-0 gap-2"><Users className="h-4 w-4" />Публичные комнаты</Button>
+        <Button variant={tab === "rooms" ? "default" : "outline"} onClick={() => { setTab("rooms"); void load(); }} className="shrink-0 gap-2"><Users className="h-4 w-4" />Публичные комнаты</Button>
         <Button variant={tab === "library" ? "default" : "outline"} onClick={() => setTab("library")} className="shrink-0 gap-2"><Film className="h-4 w-4" />Библиотека</Button>
-        <Button variant={tab === "mine" ? "default" : "outline"} onClick={() => setTab("mine")} className="shrink-0">Мои комнаты</Button>
+        <Button variant={tab === "mine" ? "default" : "outline"} onClick={() => { setTab("mine"); void load(); }} className="shrink-0">Мои комнаты</Button>
         <Button variant={tab === "create" ? "default" : "outline"} onClick={() => setTab("create")} className="shrink-0">Создать</Button>
       </div>
 
