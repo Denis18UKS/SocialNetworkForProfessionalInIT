@@ -27,9 +27,20 @@ patch('android-app/app/src/main/java/io/itbird/socialbird/MainActivity.java', (i
   return source;
 });
 
+patch('android-app/app/src/main/java/io/itbird/socialbird/SocialBirdFirebaseMessagingService.java', (input) => {
+  // NATIVE_FCM_PUSH: canonical-push-origin
+  // A WebView session is origin-scoped. Opening the old nip.io host from a push made
+  // localStorage/JWT look empty even though the user was signed in on socialbird.ru.
+  return input.replace(
+    'private static final String SITE_ORIGIN = "https://socialbird.31.207.74.138.nip.io";',
+    'private static final String SITE_ORIGIN = "https://socialbird.ru";'
+  );
+});
+
 patch('android-app/app/src/main/java/io/itbird/socialbird/BackgroundMessagingService.java', (input) => {
   let source = input
-    .replace('private static final String WS_URL = "wss://api.31.207.74.138.nip.io";', 'private static final String WS_URL = "wss://api.socialbird.ru";');
+    .replace('private static final String WS_URL = "wss://api.31.207.74.138.nip.io";', 'private static final String WS_URL = "wss://api.socialbird.ru";')
+    .replace('Uri.parse("https://socialbird.31.207.74.138.nip.io" + normalized)', 'Uri.parse("https://socialbird.ru" + normalized)');
 
   if (!source.includes('NATIVE_FCM_PUSH: no-persistent-socket')) {
     const marker = `        if (normalized.isEmpty()) {\n            context.stopService(new Intent(context, BackgroundMessagingService.class));\n            dismissIncomingCallNotification(context);\n            return;\n        }\n\n        Intent intent = new Intent(context, BackgroundMessagingService.class)`;
@@ -55,4 +66,13 @@ patch('android-app/app/src/main/java/io/itbird/socialbird/BackgroundMessagingSer
   return source;
 });
 
-console.log('Native FCM Android runtime wiring is current.');
+const fcmService = fs.readFileSync(path.join(root, 'android-app/app/src/main/java/io/itbird/socialbird/SocialBirdFirebaseMessagingService.java'), 'utf8');
+const backgroundService = fs.readFileSync(path.join(root, 'android-app/app/src/main/java/io/itbird/socialbird/BackgroundMessagingService.java'), 'utf8');
+if (!fcmService.includes('private static final String SITE_ORIGIN = "https://socialbird.ru";')) {
+  throw new Error('Native FCM Android patch failed: FCM push still uses a non-canonical origin');
+}
+if (!backgroundService.includes('Uri.parse("https://socialbird.ru" + normalized)')) {
+  throw new Error('Native FCM Android patch failed: background notification still uses a non-canonical origin');
+}
+
+console.log('Native FCM Android runtime wiring is current. All push/deep-link entry points stay on socialbird.ru so the signed-in WebView session is preserved.');
