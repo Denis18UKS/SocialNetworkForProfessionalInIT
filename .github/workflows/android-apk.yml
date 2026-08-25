@@ -11,6 +11,7 @@ on:
       - "deploy/apply-native-fcm-android.mjs"
       - "deploy/apply-android-update-awareness.mjs"
       - "deploy/apply-cparty-android-deeplink.mjs"
+      - "deploy/apply-android-forced-updater.mjs"
       - ".github/workflows/android-apk.yml"
 
 permissions:
@@ -40,19 +41,24 @@ jobs:
           node --check deploy/apply-native-fcm-android.mjs
           node --check deploy/apply-android-update-awareness.mjs
           node --check deploy/apply-cparty-android-deeplink.mjs
+          node --check deploy/apply-android-forced-updater.mjs
           node deploy/apply-android-runtime-fixes.mjs
           node deploy/apply-native-fcm-android.mjs
           node deploy/apply-android-update-awareness.mjs
           node deploy/apply-cparty-android-deeplink.mjs
+          node deploy/apply-android-forced-updater.mjs
           grep -q "NATIVE_ANDROID_RUNTIME: initialize-runtime" android-app/app/src/main/java/io/itbird/socialbird/MainActivity.java
           grep -q "NATIVE_ANDROID_RUNTIME: answer-intent" android-app/app/src/main/java/io/itbird/socialbird/MainActivity.java
           grep -q "NATIVE_ANDROID_RUNTIME: web-fullscreen" android-app/app/src/main/java/io/itbird/socialbird/MainActivity.java
           grep -q "NATIVE_FCM_PUSH" android-app/app/src/main/java/io/itbird/socialbird/MainActivity.java
           grep -q "ANDROID_UPDATE_AWARENESS: expose-version-code" android-app/app/src/main/java/io/itbird/socialbird/MainActivity.java
           grep -q "CPARTY_ANDROID_DEEPLINK_V1: canonical-socialbird-origin" android-app/app/src/main/java/io/itbird/socialbird/MainActivity.java
+          grep -q "NATIVE_FORCED_UPDATE_V1: launch-gate" android-app/app/src/main/java/io/itbird/socialbird/MainActivity.java
+          grep -q "NATIVE_FORCED_UPDATE_V1: stable-release-manifest" android-app/app/src/main/java/io/itbird/socialbird/NativeUpdateManager.java
           grep -q 'SITE_ORIGIN = "https://socialbird.ru"' android-app/app/src/main/java/io/itbird/socialbird/MainActivity.java
           grep -q "SocialBirdFirebaseMessagingService" android-app/app/src/main/AndroidManifest.xml
           grep -q "android.permission.CAMERA" android-app/app/src/main/AndroidManifest.xml
+          grep -q "android.permission.REQUEST_INSTALL_PACKAGES" android-app/app/src/main/AndroidManifest.xml
           grep -q "firebase-messaging" android-app/app/build.gradle
 
       - name: Require Firebase Android configuration
@@ -116,12 +122,32 @@ jobs:
           SOCIALBIRD_FIREBASE_SENDER_ID: ${{ vars.SOCIALBIRD_FIREBASE_SENDER_ID }}
         run: gradle -p android-app assembleDebug --no-daemon --stacktrace
 
-      - name: Prepare stable APK and version metadata
+      - name: Prepare stable APK and forced-update metadata
+        shell: bash
         run: |
           cp android-app/app/build/outputs/apk/debug/app-debug.apk SocialBIRD-Android.apk
           test -s SocialBIRD-Android.apk
-          node -e "const fs=require('fs');const n=Number(process.env.GITHUB_RUN_NUMBER);fs.writeFileSync('SocialBIRD-Android-version.json',JSON.stringify({versionCode:n,versionName:'1.2.'+n,publishedAt:new Date().toISOString()},null,2)+'\\n')"
+          APK_SHA256="$(sha256sum SocialBIRD-Android.apk | awk '{print $1}')"
+          SOCIALBIRD_APK_SHA256="$APK_SHA256" node <<'NODE'
+          const fs = require('fs');
+          const versionCode = Number(process.env.GITHUB_RUN_NUMBER);
+          const versionName = `1.2.${versionCode}`;
+          const metadata = {
+            versionCode,
+            versionName,
+            minSupportedVersionCode: versionCode,
+            forceUpdate: true,
+            apkUrl: 'https://github.com/Denis18UKS/SocialNetworkForProfessionalInIT/releases/download/android-latest/SocialBIRD-Android.apk',
+            sha256: process.env.SOCIALBIRD_APK_SHA256,
+            publishedAt: new Date().toISOString(),
+            channel: 'android-latest'
+          };
+          fs.writeFileSync('SocialBIRD-Android-version.json', JSON.stringify(metadata, null, 2) + '\n');
+          NODE
           test -s SocialBIRD-Android-version.json
+          grep -q '"forceUpdate": true' SocialBIRD-Android-version.json
+          grep -q '"minSupportedVersionCode"' SocialBIRD-Android-version.json
+          grep -q '"sha256"' SocialBIRD-Android-version.json
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
@@ -136,12 +162,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          NOTES="SocialBIRD Android: production React/WebRTC, FCM push-звонки и уведомления, PiP/MediaProjection, C-Party QR/deep-link через socialbird.ru и принудительное self-update APK с SHA-256 проверкой."
           if gh release view android-latest >/dev/null 2>&1; then
-            gh release upload android-latest SocialBIRD-Android.apk SocialBIRD-Android-version.json --clobber
-            gh release edit android-latest --notes "SocialBIRD Android: production React/WebRTC, FCM push-звонки и уведомления, PiP/MediaProjection, C-Party QR/deep-link вход через socialbird.ru, камера/микрофон, файлы и проверка обновлений APK."
+            gh release upload android-latest SocialBIRD-Android.apk --clobber
+            gh release upload android-latest SocialBIRD-Android-version.json --clobber
+            gh release edit android-latest --notes "$NOTES"
           else
             gh release create android-latest SocialBIRD-Android.apk SocialBIRD-Android-version.json \
               --title "SocialBIRD Android" \
-              --notes "SocialBIRD Android: production React/WebRTC, FCM push-звонки и уведомления, PiP/MediaProjection, C-Party QR/deep-link вход через socialbird.ru, камера/микрофон, файлы и проверка обновлений APK." \
+              --notes "$NOTES" \
               --prerelease
           fi
