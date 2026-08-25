@@ -18,10 +18,12 @@ sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   deploy/apply-cinema-unrestricted-storage.mjs \
   deploy/apply-cinema-format-normalization-v1.mjs \
   deploy/apply-cinema-existing-normalize-v1.mjs \
+  deploy/apply-cinema-upload-compat-v1.mjs \
   backend/cinema-transcode-worker.js
 node --check deploy/apply-cinema-unrestricted-storage.mjs
 node --check deploy/apply-cinema-format-normalization-v1.mjs
 node --check deploy/apply-cinema-existing-normalize-v1.mjs
+node --check deploy/apply-cinema-upload-compat-v1.mjs
 node --check backend/cinema-transcode-worker.js
 
 # SOCIALBIRD_UNRESTRICTED_DEPLOY_V3
@@ -40,8 +42,9 @@ skipping { next }
 # 1) ensure FFmpeg/FFprobe exist,
 # 2) add automatic browser-compatible media normalization,
 # 3) add conversion controls for already-uploaded legacy media,
-# 4) keep the user's unrestricted upload/storage defaults,
-# 5) syntax-check the resulting backend before later build/restart stages.
+# 4) preserve compatibility with old Admin Desktop clients,
+# 5) keep the user's unrestricted upload/storage defaults,
+# 6) syntax-check the resulting backend before later build/restart stages.
 awk '
 /^echo "\[2\/10\] Checking modules"/ {
   print "if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then"
@@ -53,6 +56,7 @@ awk '
   print "ffprobe -version | head -n 1"
   print "sudo -u \"$APP_USER\" node deploy/apply-cinema-format-normalization-v1.mjs"
   print "sudo -u \"$APP_USER\" node deploy/apply-cinema-existing-normalize-v1.mjs"
+  print "sudo -u \"$APP_USER\" node deploy/apply-cinema-upload-compat-v1.mjs"
   print "sudo -u \"$APP_USER\" node deploy/apply-cinema-unrestricted-storage.mjs"
   print "node --check backend/admin-cinema-library.js"
   print "node --check backend/cinema-transcode-worker.js"
@@ -67,5 +71,6 @@ echo "Artificial disk preflight limit disabled."
 echo "C-Party upload size/reserve limits disabled by default."
 echo "C-Party browser video normalization enabled (FFmpeg/FFprobe)."
 echo "Existing incompatible C-Party media can be normalized without re-upload."
+echo "Older Admin Desktop clients remain upload-compatible during background conversion."
 df -h "$APP_DIR" || true
 exec bash "$TMP2"
