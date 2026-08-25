@@ -37,8 +37,27 @@ export const createSpeakingMonitor = (
   let frame = 0;
   let stopped = false;
 
+  // SOCIALBIRD_CALL_SYSTEM_V4: mobile-speaking-context-resume
+  // Android WebView may create an AudioContext while the app is waking from a push
+  // action. Keep retrying and also resume on every real user/visibility gesture.
+  const resumeContext = () => {
+    if (stopped || context.state !== "suspended") return;
+    void context.resume().catch(() => undefined);
+  };
+  const resumeWhenVisible = () => {
+    if (document.visibilityState === "visible") resumeContext();
+  };
+
+  window.addEventListener("focus", resumeContext);
+  window.addEventListener("pageshow", resumeContext);
+  window.addEventListener("pointerdown", resumeContext, { passive: true });
+  window.addEventListener("touchend", resumeContext, { passive: true });
+  document.addEventListener("visibilitychange", resumeWhenVisible);
+  const resumeTimer = window.setInterval(resumeContext, 1000);
+
   const update = () => {
     if (stopped) return;
+    if (context.state === "suspended") resumeContext();
     analyser.getByteTimeDomainData(samples);
     let energy = 0;
     for (const sample of samples) {
@@ -57,7 +76,7 @@ export const createSpeakingMonitor = (
     frame = window.requestAnimationFrame(update);
   };
 
-  void context.resume().catch(() => undefined);
+  resumeContext();
   frame = window.requestAnimationFrame(update);
 
   const forceSilent = () => {
@@ -66,14 +85,23 @@ export const createSpeakingMonitor = (
       onSpeakingChange(false);
     }
   };
+  const resumeOnUnmute = () => resumeContext();
   track.addEventListener("ended", forceSilent);
   track.addEventListener("mute", forceSilent);
+  track.addEventListener("unmute", resumeOnUnmute);
 
   return () => {
     stopped = true;
     window.cancelAnimationFrame(frame);
+    window.clearInterval(resumeTimer);
     track.removeEventListener("ended", forceSilent);
     track.removeEventListener("mute", forceSilent);
+    track.removeEventListener("unmute", resumeOnUnmute);
+    window.removeEventListener("focus", resumeContext);
+    window.removeEventListener("pageshow", resumeContext);
+    window.removeEventListener("pointerdown", resumeContext);
+    window.removeEventListener("touchend", resumeContext);
+    document.removeEventListener("visibilitychange", resumeWhenVisible);
     try { source.disconnect(); } catch {}
     try { analyser.disconnect(); } catch {}
     void context.close().catch(() => undefined);
