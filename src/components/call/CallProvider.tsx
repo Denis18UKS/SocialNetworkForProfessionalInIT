@@ -201,6 +201,9 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
   const speakingStopsRef = useRef<Record<string, () => void>>({});
   const audioRootRef = useRef<HTMLDivElement | null>(null);
   const autoAnswerRef = useRef(false);
+  // SOCIALBIRD_CALL_SYSTEM_V4: accept-transition-lock
+  const acceptingRef = useRef(false);
+  const startingRef = useRef(false);
   const ringtoneContextRef = useRef<AudioContext | null>(null);
   const ringtoneTimerRef = useRef<number | null>(null);
   const currentUserIdRef = useRef<number | null>(null);
@@ -553,6 +556,7 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
   }, [monitorAudioTrack]);
 
   const startCall = useCallback(async (input: StartCallInput) => {
+    if (startingRef.current) return;
     if (callRef.current || incomingRef.current) {
       toast.error("Сначала завершите текущий звонок");
       return;
@@ -566,6 +570,7 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
       .filter((id) => Number.isFinite(id) && id > 0 && id !== selfId);
     if (targets.length === 0) return;
 
+    startingRef.current = true;
     try {
       const stream = await ensureLocalMedia(input.kind, "user");
       const participants = dedupeParticipants([
@@ -603,6 +608,8 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
     } catch (error) {
       finishCallLocally("start-error");
       toast.error(error instanceof Error ? error.message : "Не удалось начать звонок");
+    } finally {
+      startingRef.current = false;
     }
   }, [ensureLocalMedia, finishCallLocally, makeOffer, publishActive, sendSignal]);
 
@@ -612,6 +619,8 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
       autoAnswerRef.current = true;
       return;
     }
+    if (acceptingRef.current) return;
+    acceptingRef.current = true;
     const selfId = currentUserIdRef.current;
     if (!selfId) return;
 
@@ -672,6 +681,8 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
     } catch (error) {
       finishCallLocally("accept-error");
       toast.error(error instanceof Error ? error.message : "Не удалось принять звонок");
+    } finally {
+      acceptingRef.current = false;
     }
   }, [ensureLocalMedia, finishCallLocally, handleOffer, makeOffer, publishActive, sendSignal, stopRingtone]);
 
@@ -892,6 +903,15 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
     if (!selfId || Number(signal.senderId) === selfId) return;
     if (Array.isArray(signal.targetIds) && !signal.targetIds.map(Number).includes(selfId)) return;
 
+    // SOCIALBIRD_CALL_SYSTEM_V4: stale-call-signal-guard
+    if (type !== "CALL_INVITE") {
+      const relevant = callRef.current || incomingRef.current;
+      if (relevant) {
+        if (relevant.callId && signal.callId && relevant.callId !== signal.callId) return;
+        if (String(relevant.chatId) !== String(signal.chatId) || relevant.mode !== signal.mode) return;
+      }
+    }
+
     if (type === "CALL_INVITE") {
       processIncomingInvite(signal);
       return;
@@ -937,7 +957,8 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
       const peerId = Number(signal.senderId);
       if (!Number.isFinite(peerId) || peerId <= 0) return;
       if (!peersRef.current[peerId] || !peersRef.current[peerId].pc.remoteDescription) {
-        if (selfId < peerId || active.direction === "outgoing") await makeOffer(peerId);
+        // SOCIALBIRD_CALL_SYSTEM_V4: fresh-offer-after-accept
+        if (selfId < peerId || active.direction === "outgoing") await makeOffer(peerId, true);
       }
       setCall((current) => current ? { ...current, phase: "active" } : current);
       return;
