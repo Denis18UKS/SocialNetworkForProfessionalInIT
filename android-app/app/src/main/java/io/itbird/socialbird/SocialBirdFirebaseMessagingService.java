@@ -20,12 +20,13 @@ import java.util.Map;
 
 /**
  * True Android push entry point. FCM can start this service while the WebView and
- * the persistent WebSocket process are absent. It only presents Android UI; once
- * the user answers/opens the notification the existing React/WebRTC call host owns
- * the interactive call exactly like on the website.
+ * the persistent WebSocket process are absent. The Answer action is encoded in
+ * the deep-link as well as an Intent extra so a cold-started React app cannot lose it.
  */
 public class SocialBirdFirebaseMessagingService extends FirebaseMessagingService {
-    private static final String SITE_ORIGIN = "https://socialbird.ru";
+    // MainActivity in older installed builds trusts this host. The website itself
+    // redirects/serves the same SocialBIRD frontend, while newer builds may use socialbird.ru.
+    private static final String SITE_ORIGIN = "https://socialbird.31.207.74.138.nip.io";
     private static final String CHANNEL_CALLS = "socialbird_calls";
     private static final String CHANNEL_MESSAGES = "socialbird_messages";
     private static final int CALL_NOTIFICATION_ID = 4102;
@@ -49,8 +50,6 @@ public class SocialBirdFirebaseMessagingService extends FirebaseMessagingService
             return;
         }
 
-        // Foreground React already receives the same targeted event over WebSocket.
-        // Suppressing FCM UI here prevents duplicate message/call cards.
         if (MainActivity.isVisible()) return;
 
         if ("CALL_INVITE".equals(type)) {
@@ -103,8 +102,9 @@ public class SocialBirdFirebaseMessagingService extends FirebaseMessagingService
         if (callerName.isBlank()) callerName = title.replace(" звонит", "").trim();
         if (callerName.isBlank()) callerName = "SocialBIRD";
 
-        Intent ringIntent = buildOpenIntent(route)
-            .putExtra("incoming_call", true);
+        Intent ringIntent = buildOpenIntent(route, "open")
+            .putExtra("incoming_call", true)
+            .putExtra(BackgroundMessagingService.EXTRA_CALL_JSON, payload.toString());
         PendingIntent ringPending = PendingIntent.getActivity(
             this,
             5300,
@@ -112,9 +112,10 @@ public class SocialBirdFirebaseMessagingService extends FirebaseMessagingService
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
 
-        Intent answerIntent = buildOpenIntent(route)
+        Intent answerIntent = buildOpenIntent(route, "answer")
             .putExtra("incoming_call", true)
-            .putExtra("answer_call", true);
+            .putExtra("answer_call", true)
+            .putExtra(BackgroundMessagingService.EXTRA_CALL_JSON, payload.toString());
         PendingIntent answerPending = PendingIntent.getActivity(
             this,
             5301,
@@ -175,7 +176,7 @@ public class SocialBirdFirebaseMessagingService extends FirebaseMessagingService
         String title = value(data, "title", "SocialBIRD");
         String body = value(data, "body", "Новое уведомление");
         String route = value(data, "route", "/");
-        Intent openIntent = buildOpenIntent(route);
+        Intent openIntent = buildOpenIntent(route, null);
         int requestCode = 6000 + Math.abs((title + route + body).hashCode() % 100000);
         PendingIntent openPending = PendingIntent.getActivity(
             this,
@@ -200,11 +201,15 @@ public class SocialBirdFirebaseMessagingService extends FirebaseMessagingService
         manager.notify(requestCode, builder.build());
     }
 
-    private Intent buildOpenIntent(String route) {
+    private Intent buildOpenIntent(String route, String callAction) {
         String normalized = route == null || route.isBlank() ? "/" : route;
         if (!normalized.startsWith("/")) normalized = "/" + normalized;
+        Uri.Builder uri = Uri.parse(SITE_ORIGIN + normalized).buildUpon();
+        if (callAction != null && !callAction.isBlank()) {
+            uri.appendQueryParameter("sb_call_action", callAction);
+        }
         return new Intent(this, MainActivity.class)
-            .setData(Uri.parse(SITE_ORIGIN + normalized))
+            .setData(uri.build())
             .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
     }
 
