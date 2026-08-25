@@ -27,7 +27,8 @@ mkdir -p "$BACKUP_ROOT" "$BACKUP_DIR"
 BACKUP_FILES=(
   backend/server.js backend/server.production.js
   src/App.tsx src/components/VoiceCallControls.tsx src/components/AppSidebar.tsx
-  src/components/CinemaQrScanner.tsx src/lib/call-audio-reliability.ts src/lib/cinema-upload.ts
+  src/components/CinemaQrScanner.tsx src/components/RealtimeNotifications.tsx
+  src/lib/call-audio-reliability.ts src/lib/cinema-upload.ts
   src/pages/GroupChats.tsx src/pages/Users.tsx src/pages/Settings.tsx src/pages/Login.tsx
   src/pages/CinemaParty.tsx src/pages/CinemaPartyRoom.tsx src/styles/chat-platform-v1.css
 )
@@ -73,10 +74,11 @@ sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   src/pages/Login.tsx src/pages/EmailChange.tsx src/pages/ChatFolders.tsx src/pages/CinemaParty.tsx src/pages/CinemaPartyRoom.tsx \
   src/pages/CinemaTitle.tsx src/pages/CinemaPerson.tsx \
   deploy/apply-global-call-overlay-v1.mjs deploy/apply-socialbird-final-runtime-v1.mjs \
+  deploy/apply-cparty-realtime-end-v1.mjs \
   deploy/harden-source.mjs deploy/enable-sandbox-compiler.mjs
 
 echo "[2/10] Checking modules"
-for f in backend/socialbird-final-platform.js backend/strict-privacy-gate.js backend/stable-news-time.js backend/cinema-qr.js backend/cinema-stream.js backend/admin-cinema-library.js deploy/apply-global-call-overlay-v1.mjs deploy/apply-socialbird-final-runtime-v1.mjs; do node --check "$f"; done
+for f in backend/socialbird-final-platform.js backend/strict-privacy-gate.js backend/stable-news-time.js backend/cinema-qr.js backend/cinema-stream.js backend/admin-cinema-library.js deploy/apply-global-call-overlay-v1.mjs deploy/apply-socialbird-final-runtime-v1.mjs deploy/apply-cparty-realtime-end-v1.mjs; do node --check "$f"; done
 require_text backend/socialbird-final-platform.js "cinemaResumableUpload: true" "C-Party resumable upload"
 require_text backend/socialbird-final-platform.js "videoRecompression: false" "original video quality"
 require_text backend/strict-privacy-gate.js "profile_restricted: true" "strict profile privacy"
@@ -90,9 +92,13 @@ require_text src/components/VoiceCallControls.tsx "APP_FIX: removable-screen-tra
 echo "[3/10] Applying final wiring"
 sudo -u "$APP_USER" node deploy/apply-global-call-overlay-v1.mjs
 sudo -u "$APP_USER" node deploy/apply-socialbird-final-runtime-v1.mjs
+sudo -u "$APP_USER" node deploy/apply-cparty-realtime-end-v1.mjs
 require_text backend/server.js "SOCIALBIRD_FINAL_PLATFORM_V1: early-middleware" "privacy/news middleware"
 require_text backend/server.js "SOCIALBIRD_FINAL_PLATFORM_V1: final-routes" "final backend routes"
 require_text backend/server.js "SOCIALBIRD_ADMIN_CINEMA_V1: routes" "Admin Cinema routes wired"
+require_text backend/socialbird-final-platform.js "SOCIALBIRD_CPARTY_REALTIME_END_V1: server-broadcast" "C-Party realtime room-end broadcast"
+require_text src/components/RealtimeNotifications.tsx "SOCIALBIRD_CPARTY_REALTIME_END_V1: websocket-bridge" "C-Party realtime websocket bridge"
+require_text src/pages/CinemaPartyRoom.tsx "SOCIALBIRD_CPARTY_REALTIME_END_V1: force-eject" "C-Party force eject on room end"
 require_text src/components/VoiceCallControls.tsx "SOCIALBIRD_GLOBAL_CALL_V1: persistent-call-state" "persistent global call"
 require_text src/App.tsx "<GlobalCallOverlay />" "global call overlay"
 require_text src/pages/GroupChats.tsx "messages/all-v2" "creator clear-all UI"
@@ -167,5 +173,5 @@ chown -R "$APP_USER:$APP_USER" backend src dist 2>/dev/null || true
 
 echo
 echo "SocialBIRD final platform deployed successfully."
-echo "Included: global persistent calls/fullscreen streams, strict profiles, remove-friend flow, chat folders, verified email change, creator-only group clear, stable news time, C-Party QR scanner/invite reauth, faster uploads and Admin Cinema Library uploads."
+echo "Included: global persistent calls/fullscreen streams, strict profiles, remove-friend flow, chat folders, verified email change, creator-only group clear, stable news time, C-Party QR scanner/invite reauth, realtime force-end/eject, faster uploads and Admin Cinema Library uploads."
 echo "Backup: $BACKUP_DIR"
