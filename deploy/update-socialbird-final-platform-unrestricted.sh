@@ -13,9 +13,8 @@ trap 'rm -f "$TMP" "$TMP2"' EXIT
 cd "$APP_DIR"
 [[ -f "$SOURCE" ]] || { echo "Missing $SOURCE" >&2; exit 1; }
 
-# Only optional/unrestricted C-Party patchers and new additive Call V4 bridge files
-# are refreshed before the generated deployment starts. Canonical application files
-# are fetched by the normal updater after its rollback backup is created.
+# Refresh only optional patchers before the generated deploy. Call V4 application
+# files are deliberately fetched AFTER the regular updater has created its backup.
 sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   deploy/apply-cinema-unrestricted-storage.mjs \
   deploy/apply-cinema-format-normalization-v1.mjs \
@@ -23,8 +22,6 @@ sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   deploy/apply-cinema-upload-compat-v1.mjs \
   deploy/apply-cparty-session-media-change-v1.mjs \
   deploy/apply-cparty-participant-media-reload-v2.mjs \
-  src/components/call/NativeCallAudioBridge.tsx \
-  src/components/call/PushCallDeepLinkBridge.tsx \
   backend/cinema-transcode-worker.js
 node --check deploy/apply-cinema-unrestricted-storage.mjs
 node --check deploy/apply-cinema-format-normalization-v1.mjs
@@ -34,9 +31,9 @@ node --check deploy/apply-cparty-session-media-change-v1.mjs
 node --check deploy/apply-cparty-participant-media-reload-v2.mjs
 node --check backend/cinema-transcode-worker.js
 
-# SOCIALBIRD_UNRESTRICTED_DEPLOY_V10
-# Remove only the artificial pre-deploy free-space gate. Normal backup, rollback,
-# syntax checks, frontend build, nginx, PM2 and smoke tests remain enabled.
+# SOCIALBIRD_UNRESTRICTED_DEPLOY_V11
+# Remove only the artificial pre-deploy free-space gate. Backup, rollback, syntax
+# checks, frontend build, nginx, PM2 and smoke tests remain enabled.
 awk '
 BEGIN { skipping=0 }
 /^MIN_FREE_KB=/ { next }
@@ -46,13 +43,22 @@ skipping { next }
 { print }
 ' "$SOURCE" > "$TMP"
 
-# Add the user's unrestricted C-Party policy and the in-session media extensions.
-# Call System V4 is already canonical in the normal updater and is deliberately not
-# rewritten here.
+# Extend the regular rollback set with every file introduced/mutated by Call V4,
+# then fetch those files only after the backup has been created. This makes a failed
+# migration safe even on a VPS that still contains old SOCIAL_NEXT/MOBILE_CALL patches.
 awk '
+/^BACKUP_FILES=\(/ {
+  print
+  print "  backend/offline-call-queue.js"
+  print "  src/components/call/NativeCallAudioBridge.tsx src/components/call/PushCallDeepLinkBridge.tsx"
+  next
+}
 /^echo "\[2\/10\] Checking modules"/ {
+  print "sudo -u \"$APP_USER\" git checkout \"origin/$BRANCH\" -- backend/offline-call-queue.js src/components/call/NativeCallAudioBridge.tsx src/components/call/PushCallDeepLinkBridge.tsx"
+  print "test -s backend/offline-call-queue.js"
   print "test -s src/components/call/NativeCallAudioBridge.tsx"
   print "test -s src/components/call/PushCallDeepLinkBridge.tsx"
+  print "node --check backend/offline-call-queue.js"
   print "if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then"
   print "  export DEBIAN_FRONTEND=noninteractive"
   print "  apt-get update -qq"
@@ -86,7 +92,8 @@ echo "Existing incompatible C-Party media can be normalized without re-upload."
 echo "Older Admin Desktop clients remain upload-compatible during background conversion."
 echo "C-Party custom-upload rooms can switch video during an active session."
 echo "C-Party participants force-reload the new media source in realtime and via polling fallback."
-echo "Unified Call System V4 enabled: mobile controls, speaking indicator, camera flip, screen share and push-answer bridge."
+echo "Unified Call System V4 enabled: mobile controls, speaking indicator, camera flip, screen share, durable signaling and push-answer bridge."
+echo "Call V4 migration files are included in backup/rollback."
 echo "SocialBIRD offline shell/static/private-API cache support enabled."
 df -h "$APP_DIR" || true
 exec bash "$TMP2"
