@@ -32,7 +32,7 @@ BACKUP_FILES=(
   src/components/CinemaQrScanner.tsx src/components/RealtimeNotifications.tsx
   src/lib/call-audio-reliability.ts src/lib/cinema-upload.ts
   src/pages/GroupChats.tsx src/pages/Users.tsx src/pages/Settings.tsx src/pages/Login.tsx
-  src/pages/CinemaParty.tsx src/pages/CinemaPartyRoom.tsx src/styles/chat-platform-v1.css
+  src/pages/AndroidApp.tsx src/pages/CinemaParty.tsx src/pages/CinemaPartyRoom.tsx src/styles/chat-platform-v1.css
 )
 for f in "${BACKUP_FILES[@]}"; do
   if [[ -f "$f" ]]; then mkdir -p "$BACKUP_DIR/$(dirname "$f")"; cp -a "$f" "$BACKUP_DIR/$f"; fi
@@ -73,7 +73,7 @@ sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   src/App.tsx src/components/VoiceCallControls.tsx src/components/GlobalCallOverlay.tsx \
   src/components/StrictUserProfileRoute.tsx src/components/AppSidebar.tsx src/components/CinemaQrScanner.tsx \
   src/lib/call-audio-reliability.ts src/lib/cinema-upload.ts \
-  src/pages/Login.tsx src/pages/EmailChange.tsx src/pages/ChatFolders.tsx src/pages/CinemaParty.tsx src/pages/CinemaPartyRoom.tsx \
+  src/pages/Login.tsx src/pages/EmailChange.tsx src/pages/ChatFolders.tsx src/pages/AndroidApp.tsx src/pages/CinemaParty.tsx src/pages/CinemaPartyRoom.tsx \
   src/pages/CinemaTitle.tsx src/pages/CinemaPerson.tsx \
   deploy/apply-global-call-overlay-v1.mjs deploy/apply-socialbird-final-runtime-v1.mjs \
   deploy/apply-cparty-realtime-end-v1.mjs \
@@ -90,6 +90,7 @@ require_text src/lib/cinema-upload.ts "MAX_PARALLEL_CHUNKS = 4" "parallel C-Part
 require_text src/components/CinemaQrScanner.tsx "BarcodeDetector" "in-app C-Party QR scanner"
 require_text src/components/VoiceCallControls.tsx "CALL_RELIABILITY: persistent-audio-and-health" "canonical v4 call reliability source"
 require_text src/components/VoiceCallControls.tsx "APP_FIX: removable-screen-track" "canonical v4 screen sharing source"
+require_text src/pages/AndroidApp.tsx "SocialBIRD-Android.apk" "Android stable download page"
 
 echo "[3/10] Applying final wiring"
 sudo -u "$APP_USER" node deploy/apply-global-call-overlay-v1.mjs
@@ -180,5 +181,5 @@ chown -R "$APP_USER:$APP_USER" backend src dist 2>/dev/null || true
 
 echo
 echo "SocialBIRD final platform deployed successfully."
-echo "Included: global persistent calls/fullscreen streams, strict profiles, remove-friend flow, chat folders, verified email change, creator-only group clear, stable news time, C-Party QR scanner/invite reauth, realtime force-end/eject, faster uploads and Admin Cinema Library uploads."
+echo "Included: global persistent calls/fullscreen streams, strict profiles, remove-friend flow, chat folders, verified email change, creator-only group clear, stable news time, C-Party QR scanner/invite reauth, realtime force-end/eject, faster uploads, Android download page and Admin Cinema Library uploads."
 echo "Backup: $BACKUP_DIR"
