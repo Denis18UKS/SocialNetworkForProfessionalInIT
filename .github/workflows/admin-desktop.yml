@@ -9,6 +9,7 @@ on:
       - "admin-desktop/**"
       - "backend/cinema-transcode-worker.js"
       - "deploy/apply-cinema-format-normalization-v1.mjs"
+      - "deploy/apply-cinema-existing-normalize-v1.mjs"
       - ".github/workflows/admin-desktop.yml"
 
 permissions:
@@ -38,8 +39,10 @@ jobs:
         working-directory: .
         run: |
           node --check deploy/apply-cinema-format-normalization-v1.mjs
+          node --check deploy/apply-cinema-existing-normalize-v1.mjs
           node --check backend/cinema-transcode-worker.js
           node deploy/apply-cinema-format-normalization-v1.mjs
+          node deploy/apply-cinema-existing-normalize-v1.mjs
 
       - name: Validate JavaScript syntax
         run: |
@@ -77,7 +80,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         working-directory: .
         run: |
-          NOTES="SocialBIRD Admin Desktop 1.2: email 2FA, управление пользователями, модерация, аудит и C-Party Library Manager. Поддерживает MP4/WebM без лишнего пережатия и автоматически готовит AVI/MKV/MOV/WMV/FLV/MPEG/TS/3GP/OGV для браузерного плеера через MP4 H.264/AAC."
+          NOTES="SocialBIRD Admin Desktop 1.2: C-Party Library Manager поддерживает MP4/WebM без лишнего пережатия, автоматически готовит AVI/MKV/MOV/WMV/FLV/MPEG/TS/3GP/OGV как MP4 H.264/AAC и умеет конвертировать уже загруженные несовместимые фильмы/серии без повторной загрузки."
           if gh release view admin-desktop-latest >/dev/null 2>&1; then
             gh release upload admin-desktop-latest admin-desktop/dist/SocialBIRD-Admin-Setup.exe --clobber
             gh release edit admin-desktop-latest --notes "$NOTES"
