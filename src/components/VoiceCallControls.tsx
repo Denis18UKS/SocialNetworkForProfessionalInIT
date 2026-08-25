@@ -1,43 +1,14 @@
-import { useEffect, useRef, useState } from "react";
-import {
-  ChevronDown,
-  Headphones,
-  Mic,
-  MicOff,
-  Phone,
-  PhoneCall,
-  PhoneOff,
-  ScreenShare,
-  ScreenShareOff,
-  Users,
-  Video,
-  VideoOff,
-  Volume2,
-  VolumeX,
-} from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Phone, PhoneCall, Users, Video } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
-import { useToast } from "@/hooks/use-toast";
-import { getWsUrl, readSettings } from "@/lib/settings";
-import { getIceServers } from "@/lib/webrtc";
-import { getPeerConnectionConfig, playRemoteMedia, requestCallMedia, requestCameraTrack } from "@/lib/webrtc";
-import { createReconnectingWebSocket } from "@/lib/reconnecting-websocket";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
-  attachPersistentAudioTrack,
-  createSpeakingMonitor,
-  recoverMicrophoneTrack,
-  watchPeerConnection,
-} from "@/lib/call-audio-reliability";
-
-type CallMode = "private" | "group";
-type CallKind = "voice" | "video";
-
-type CallParticipant = {
-  id: number;
-  username: string;
-  avatar?: string | null;
-};
+  useCallManager,
+  type CallKind,
+  type CallMode,
+  type CallParticipant,
+} from "@/components/call/CallProvider";
 
 type VoiceCallControlsProps = {
   currentUserId?: number;
@@ -47,901 +18,116 @@ type VoiceCallControlsProps = {
   participants: CallParticipant[];
 };
 
-const iceServers: RTCConfiguration = getPeerConnectionConfig();
-
-type ActiveCallWindow = typeof window & {
-  __itbirdActiveCallEnd?: () => void;
-  __itbirdActiveCallToggleMic?: () => void;
-  __itbirdActiveCallToggleSound?: () => void;
-  __itbirdActiveCallToggleVideo?: () => void;
-  __itbirdActiveCallToggleScreen?: () => void;
-};
-
-const getGlobalMediaRoot = () => {
-  let root = document.getElementById("itbird-global-call-media") as HTMLDivElement | null;
-  if (!root) {
-    root = document.createElement("div");
-    root.id = "itbird-global-call-media";
-    root.className = "fixed bottom-[calc(7rem+var(--mobile-safe-bottom))] right-3 z-[60] flex max-w-[calc(100vw-24px)] flex-wrap justify-end gap-2 sm:right-6";
-    document.body.appendChild(root);
-  }
-  return root;
-};
-
-const attachMediaElement = (container: HTMLElement, peerId: number, stream: MediaStream, muted: boolean) => {
-  // APP_FIX: per-stream-media-elements
-  const hasVideo = stream.getVideoTracks().length > 0;
-  const streamId = stream.id || `peer-${peerId}-${hasVideo ? 'video' : 'audio'}`;
-  const selector = `${hasVideo ? 'video' : 'audio'}[data-peer-id="${peerId}"][data-stream-id="${streamId}"]`;
-  let media = container.querySelector<HTMLMediaElement>(selector);
-
-  if (!media) {
-    media = document.createElement(hasVideo ? "video" : "audio");
-    media.dataset.peerId = String(peerId);
-    media.dataset.streamId = streamId;
-    media.autoplay = true;
-    if (hasVideo) {
-      (media as HTMLVideoElement).playsInline = true;
-      media.className = "itbird-call-remote-video rounded-lg bg-black object-cover shadow-xl";
-    } else {
-      media.className = "hidden";
-    }
-    container.appendChild(media);
-  }
-
-  media.muted = muted;
-  media.srcObject = stream;
-  void playRemoteMedia(media);
-  const outputId = readSettings().audioOutputDeviceId;
-  if (outputId && "setSinkId" in media) {
-    (media as HTMLMediaElement & { setSinkId: (sinkId: string) => Promise<void> })
-      .setSinkId(outputId)
-      .catch(() => undefined);
-  }
-  return media;
-};
-
-const getMediaErrorMessage = (error: unknown) => {
-  if (!window.isSecureContext && !["localhost", "127.0.0.1", "::1"].includes(window.location.hostname)) {
-    return "На телефоне браузер запрашивает микрофон и камеру только через HTTPS или localhost. Откройте сайт по HTTPS, иначе окно разрешения не появится.";
-  }
-
-  if (error instanceof DOMException && ["NotAllowedError", "PermissionDeniedError"].includes(error.name)) {
-    return "Доступ к микрофону или камере запрещен в браузере. Нажмите на значок замка в адресной строке, разрешите доступ и повторите звонок.";
-  }
-
-  if (error instanceof DOMException && error.name === "NotFoundError") {
-    return "Не найден микрофон или камера. Подключите устройство и повторите звонок.";
-  }
-
-  return "Не удалось получить доступ к устройствам. Проверьте разрешения браузера и повторите звонок.";
-};
-
-const VoiceCallControls = ({ currentUserId, mode, chatId, title, participants }: VoiceCallControlsProps) => {
-  const { toast } = useToast();
-  const socketRef = useRef<WebSocket | null>(null);
-  const localStreamRef = useRef<MediaStream | null>(null);
-  const screenStreamRef = useRef<MediaStream | null>(null);
-  const peersRef = useRef<Record<number, RTCPeerConnection>>({});
-  const remoteMediaRef = useRef<HTMLDivElement | null>(null);
-  const localVideoRef = useRef<HTMLVideoElement | null>(null);
-  const localScreenVideoRef = useRef<HTMLVideoElement | null>(null);
-  const screenSendersRef = useRef<Record<number, RTCRtpSender>>({});
-  const pendingIceByPeerRef = useRef<Record<number, RTCIceCandidateInit[]>>({});
-  // CALL_RELIABILITY: persistent-audio-and-health
-  const localAudioSendersRef = useRef<Record<number, RTCRtpSender>>({});
-  const remoteAudioTracksRef = useRef<Record<number, MediaStreamTrack>>({});
-  const relayAudioSendersRef = useRef<Record<number, Record<number, RTCRtpSender>>>({});
-  const relayNeedsRenegotiationRef = useRef<Record<number, boolean>>({});
-  const peerWatchdogStopsRef = useRef<Record<number, () => void>>({});
-  const speakingMonitorStopsRef = useRef<Record<string, () => void>>({});
-  const remoteAudioPlaybackStopsRef = useRef<Record<string, () => void>>({});
-  const blockedAudioKeysRef = useRef<Set<string>>(new Set());
-  const deviceTestMuteRef = useRef<{ mic: boolean; sound: boolean } | null>(null);
-  const isCallingRef = useRef(false);
-  const liveCallRef = useRef(false);
-  const selfParticipantRef = useRef<CallParticipant | null>(null);
-  const [isCalling, setIsCalling] = useState(false);
+const VoiceCallControls = ({
+  currentUserId,
+  mode,
+  chatId,
+  title,
+  participants,
+}: VoiceCallControlsProps) => {
+  const { call, incoming, startCall } = useCallManager();
   const [showPicker, setShowPicker] = useState(false);
-  const [selectedIds, setSelectedIds] = useState<number[]>([]);
-  const [callKind, setCallKind] = useState<CallKind>("voice");
-  const [micEnabled, setMicEnabled] = useState(true);
-  const [soundEnabled, setSoundEnabled] = useState(true);
-  const [soundNeedsTap, setSoundNeedsTap] = useState(false);
-  const [speakingUserIds, setSpeakingUserIds] = useState<number[]>([]);
-  const [videoEnabled, setVideoEnabled] = useState(false);
-  const [screenEnabled, setScreenEnabled] = useState(false);
-  const [selfParticipant, setSelfParticipant] = useState<CallParticipant | null>(null);
-
-  const token = localStorage.getItem("token");
-  const callableParticipants = participants.filter((participant) => participant.id !== currentUserId);
-  const callTargets = mode === "private" ? callableParticipants.map((participant) => participant.id) : selectedIds;
-  const visibleCallParticipants = [
-    ...(selfParticipant ? [selfParticipant] : []),
-    ...callableParticipants.filter((participant) => callTargets.includes(participant.id)),
-  ];
-
-  const getAvatarUrl = (avatar?: string | null) => {
-    if (!avatar) return "/images/default-avatar.png";
-    if (/^https?:\/\//i.test(avatar)) return avatar;
-    return `http://localhost:5000${avatar}`;
-  };
-
-  useEffect(() => {
-    setSelectedIds(callableParticipants.map((participant) => participant.id));
-  }, [participants, currentUserId]);
-
-  useEffect(() => {
-    selfParticipantRef.current = selfParticipant;
-  }, [selfParticipant]);
-
-  useEffect(() => {
-    if (!token || !currentUserId) return;
-
-    fetch("http://localhost:5000/profile", {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((response) => (response.ok ? response.json() : null))
-      .then((profile) => {
-        if (!profile) return;
-        setSelfParticipant({
-          id: currentUserId,
-          username: profile.username || "Вы",
-          avatar: profile.avatar || null,
-        });
-      })
-      .catch(() => {
-        setSelfParticipant((current) => current || { id: currentUserId, username: "Вы" });
-      });
-  }, [token, currentUserId]);
-
-  const ensureSelfParticipant = async () => {
-    if (selfParticipantRef.current) return selfParticipantRef.current;
-    if (!token || !currentUserId) return null;
-
-    try {
-      const response = await fetch("http://localhost:5000/profile", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!response.ok) throw new Error("profile");
-      const profile = await response.json();
-      const participant = {
-        id: currentUserId,
-        username: profile.username || "Вы",
-        avatar: profile.avatar || null,
-      };
-      selfParticipantRef.current = participant;
-      setSelfParticipant(participant);
-      return participant;
-    } catch {
-      const participant = { id: currentUserId, username: "Вы" };
-      selfParticipantRef.current = participant;
-      setSelfParticipant(participant);
-      return participant;
-    }
-  };
-
-  useEffect(() => {
-    isCallingRef.current = isCalling;
-  }, [isCalling]);
-
-  // APP_FIX: local-preview-sync
-  useEffect(() => {
-    if (localVideoRef.current) {
-      localVideoRef.current.srcObject = localStreamRef.current;
-      localVideoRef.current.play().catch(() => undefined);
-    }
-    if (localScreenVideoRef.current) {
-      localScreenVideoRef.current.srcObject = screenStreamRef.current;
-      localScreenVideoRef.current.play().catch(() => undefined);
-    }
-  }, [isCalling, videoEnabled, screenEnabled]);
-
-  // CALL_RELIABILITY: Discord-like speaking state and persistent remote audio.
-  const setParticipantSpeaking = (userId: number, speaking: boolean) => {
-    if (!Number.isFinite(Number(userId))) return;
-    setSpeakingUserIds((current) => {
-      const normalized = Number(userId);
-      if (speaking) return current.includes(normalized) ? current : [...current, normalized];
-      return current.filter((id) => id !== normalized);
-    });
-    window.dispatchEvent(new CustomEvent('itbird-call-speaking', {
-      detail: { chatId, mode, userId: Number(userId), speaking },
-    }));
-  };
-
-  const monitorSpeaking = (key: string, userId: number, stream: MediaStream) => {
-    if (stream.getAudioTracks().length === 0) return;
-    speakingMonitorStopsRef.current[key]?.();
-    speakingMonitorStopsRef.current[key] = createSpeakingMonitor(stream, (speaking) => {
-      setParticipantSpeaking(userId, speaking);
-    });
-  };
-
-  const setRemotePlaybackBlocked = (key: string, blocked: boolean) => {
-    if (blocked) blockedAudioKeysRef.current.add(key);
-    else blockedAudioKeysRef.current.delete(key);
-    setSoundNeedsTap(blockedAudioKeysRef.current.size > 0);
-  };
-
-  const sendSignal = (type: string, targetIds: number[], data: Record<string, unknown>) => {
-    const self = selfParticipantRef.current || selfParticipant;
-    const callParticipants = [
-      ...(self ? [self] : []),
-      ...callableParticipants.filter((participant) => targetIds.includes(participant.id)),
-    ];
-    socketRef.current?.send(JSON.stringify({
-      type,
-      targetIds,
-      // APP_FIX: explicit-call-kind-wins
-      data: { chatId, mode, title, callKind, callerName: self?.username, participants: callParticipants, ...data },
-    }));
-  };
-
-  const ensureLocalStream = async (kind: CallKind, forceVideoEnabled = videoEnabled) => {
-    if (!localStreamRef.current) {
-      try {
-        localStreamRef.current = await requestCallMedia({ video: kind === "video" });
-      } catch (error) {
-        toast({ title: "Ошибка звонка", description: getMediaErrorMessage(error), variant: "destructive" });
-        throw error;
-      }
-    }
-
-    localStreamRef.current.getAudioTracks().forEach((track) => {
-      track.enabled = micEnabled;
-    });
-    localStreamRef.current.getVideoTracks().forEach((track) => {
-      track.enabled = kind === "video" && forceVideoEnabled;
-    });
-
-    if (localVideoRef.current) {
-      localVideoRef.current.srcObject = localStreamRef.current;
-    }
-
-    const audioTrack = localStreamRef.current.getAudioTracks()[0];
-    if (audioTrack && currentUserId) {
-      const localSpeakingKey = `local:${audioTrack.id}`;
-      if (!speakingMonitorStopsRef.current[localSpeakingKey]) {
-        monitorSpeaking(localSpeakingKey, currentUserId, new MediaStream([audioTrack]));
-      }
-    }
-
-    return localStreamRef.current;
-  };
-
-  const attachRemoteStream = (peerId: number, stream: MediaStream) => {
-    const audioTrack = stream.getAudioTracks()[0];
-    if (audioTrack) {
-      const key = `remote:${peerId}:${audioTrack.id}`;
-      if (!remoteAudioPlaybackStopsRef.current[key]) {
-        const binding = attachPersistentAudioTrack({
-          root: getGlobalMediaRoot(),
-          key,
-          track: audioTrack,
-          muted: !soundEnabled,
-          outputDeviceId: readSettings().audioOutputDeviceId,
-          onPlaybackBlocked: (blocked) => setRemotePlaybackBlocked(key, blocked),
-        });
-        remoteAudioPlaybackStopsRef.current[key] = binding.dispose;
-      } else {
-        const audio = Array.from(getGlobalMediaRoot().querySelectorAll<HTMLAudioElement>('audio[data-call-audio-key]'))
-          .find((element) => element.dataset.callAudioKey === key);
-        if (audio) {
-          audio.muted = !soundEnabled;
-          void playRemoteMedia(audio).then((playing) => setRemotePlaybackBlocked(key, !playing));
-        }
-      }
-
-      const speakingKey = `speaking:${peerId}:${audioTrack.id}`;
-      if (!speakingMonitorStopsRef.current[speakingKey]) {
-        monitorSpeaking(speakingKey, peerId, new MediaStream([audioTrack]));
-      }
-    }
-
-    if (stream.getVideoTracks().length > 0 && remoteMediaRef.current) {
-      // Audio has a dedicated persistent element, so video is intentionally muted.
-      attachMediaElement(remoteMediaRef.current, peerId, new MediaStream(stream.getVideoTracks()), true);
-    }
-  };
-
-  const relayGroupAudioTrack = async (sourcePeerId: number, track: MediaStreamTrack) => {
-    if (mode !== 'group' || track.kind !== 'audio') return;
-    remoteAudioTracksRef.current[sourcePeerId] = track;
-
-    for (const [targetKey, peer] of Object.entries(peersRef.current)) {
-      const targetPeerId = Number(targetKey);
-      if (targetPeerId === sourcePeerId || peer.signalingState === 'closed') continue;
-      relayAudioSendersRef.current[targetPeerId] ||= {};
-      if (relayAudioSendersRef.current[targetPeerId][sourcePeerId]) continue;
-
-      const relayStream = new MediaStream([track]);
-      relayAudioSendersRef.current[targetPeerId][sourcePeerId] = peer.addTrack(track, relayStream);
-      sendSignal('CALL_RELAY_TRACK', [targetPeerId], { sourcePeerId, trackId: track.id });
-
-      if (peer.remoteDescription && peer.signalingState === 'stable') {
-        await renegotiate(targetPeerId);
-      } else {
-        relayNeedsRenegotiationRef.current[targetPeerId] = true;
-      }
-    }
-  };
-
-  const repairLocalMicrophone = async () => {
-    if (!isCallingRef.current && !liveCallRef.current) return;
-    try {
-      const recovered = await recoverMicrophoneTrack(localStreamRef.current, micEnabled);
-      localStreamRef.current = recovered.stream;
-      if (!recovered.recovered) return;
-
-      for (const [peerKey, peer] of Object.entries(peersRef.current)) {
-        const peerId = Number(peerKey);
-        const sender = localAudioSendersRef.current[peerId];
-        if (sender) {
-          await sender.replaceTrack(recovered.track);
-        } else if (peer.signalingState !== 'closed') {
-          localAudioSendersRef.current[peerId] = peer.addTrack(recovered.track, recovered.stream);
-          if (peer.remoteDescription && peer.signalingState === 'stable') await renegotiate(peerId);
-        }
-      }
-
-      if (currentUserId) {
-        Object.keys(speakingMonitorStopsRef.current)
-          .filter((key) => key.startsWith('local:'))
-          .forEach((key) => { speakingMonitorStopsRef.current[key]?.(); delete speakingMonitorStopsRef.current[key]; });
-        monitorSpeaking(`local:${recovered.track.id}`, currentUserId, new MediaStream([recovered.track]));
-      }
-    } catch {
-      // The next watchdog pass retries. Browser permission errors are still surfaced when starting a call.
-    }
-  };
-
-  const createPeer = async (peerId: number, kind: CallKind) => {
-    if (peersRef.current[peerId]) return peersRef.current[peerId];
-
-    // APP_FIX: keep-initial-video-enabled
-    const stream = await ensureLocalStream(kind, kind === 'video' ? true : videoEnabled);
-    const peer = new RTCPeerConnection(iceServers);
-    stream.getTracks().forEach((track) => {
-      const sender = peer.addTrack(track, stream);
-      if (track.kind === 'audio') localAudioSendersRef.current[peerId] = sender;
-    });
-
-    // CALL_RELIABILITY: when a new group peer joins, include audio already received from other peers.
-    if (mode === 'group') {
-      for (const [sourceKey, audioTrack] of Object.entries(remoteAudioTracksRef.current)) {
-        const sourcePeerId = Number(sourceKey);
-        if (sourcePeerId === peerId || audioTrack.readyState !== 'live') continue;
-        relayAudioSendersRef.current[peerId] ||= {};
-        relayAudioSendersRef.current[peerId][sourcePeerId] = peer.addTrack(audioTrack, new MediaStream([audioTrack]));
-        sendSignal('CALL_RELAY_TRACK', [peerId], { sourcePeerId, trackId: audioTrack.id });
-      }
-    }
-
-    peer.ontrack = (event) => {
-      const remoteStream = event.streams[0] || new MediaStream([event.track]);
-      attachRemoteStream(peerId, remoteStream);
-      if (event.track.kind === 'audio') {
-        event.track.enabled = true;
-        remoteAudioTracksRef.current[peerId] = event.track;
-        const handleUnmute = () => attachRemoteStream(peerId, event.streams[0] || new MediaStream([event.track]));
-        event.track.addEventListener('unmute', handleUnmute);
-        void relayGroupAudioTrack(peerId, event.track);
-      }
-    };
-    peer.onicecandidate = (event) => {
-      if (event.candidate) sendSignal("CALL_ICE", [peerId], { candidate: event.candidate });
-    };
-
-    peersRef.current[peerId] = peer;
-    peerWatchdogStopsRef.current[peerId]?.();
-    peerWatchdogStopsRef.current[peerId] = watchPeerConnection(peer, async () => {
-      if (peer.signalingState === 'stable') await renegotiate(peerId);
-      await repairLocalMicrophone();
-    });
-    return peer;
-  };
-
-  const startCall = async (targetIds: number[], kind: CallKind) => {
-    if (!currentUserId || targetIds.length === 0) return;
-
-    try {
-      await ensureSelfParticipant();
-      setCallKind(kind);
-      const shouldEnableVideo = kind === "video";
-      setVideoEnabled(shouldEnableVideo);
-      await ensureLocalStream(kind, shouldEnableVideo);
-      liveCallRef.current = true;
-      setIsCalling(true);
-      sendSignal("CALL_INVITE", targetIds, { fromName: title, callKind: kind });
-
-      for (const targetId of targetIds) {
-        const peer = await createPeer(targetId, kind);
-        const offer = await peer.createOffer();
-        await peer.setLocalDescription(offer);
-        sendSignal("CALL_OFFER", [targetId], { description: offer, callKind: kind });
-      }
-
-      setShowPicker(false);
-    } catch {
-      setIsCalling(false);
-    }
-  };
-
-  const renegotiate = async (targetId: number, nextKind = callKind) => {
-    const peer = peersRef.current[targetId];
-    if (!peer) return;
-    const offer = await peer.createOffer();
-    await peer.setLocalDescription(offer);
-    sendSignal("CALL_OFFER", [targetId], { description: offer, callKind: nextKind, isRenegotiation: true });
-  };
-
-  const toggleMic = () => {
-    const next = !micEnabled;
-    localStreamRef.current?.getAudioTracks().forEach((track) => {
-      track.enabled = next;
-    });
-    setMicEnabled(next);
-  };
-
-  const toggleSound = () => {
-    const next = !soundEnabled;
-    const media = [
-      ...Array.from(remoteMediaRef.current?.querySelectorAll<HTMLMediaElement>("audio, video") || []),
-      ...Array.from(getGlobalMediaRoot().querySelectorAll<HTMLMediaElement>("audio, video")),
-    ];
-    media.forEach((element) => { element.muted = !next; });
-    setSoundEnabled(next);
-    if (next) {
-      void Promise.all(media.map((element) => playRemoteMedia(element))).then((results) => {
-        setSoundNeedsTap(results.some((playing) => !playing));
-      });
-    }
-  };
-
-  const forceEnableRemoteSound = () => {
-    const media = [
-      ...Array.from(remoteMediaRef.current?.querySelectorAll<HTMLMediaElement>("audio, video") || []),
-      ...Array.from(getGlobalMediaRoot().querySelectorAll<HTMLMediaElement>("audio, video")),
-    ];
-    media.forEach((element) => { element.muted = false; });
-    setSoundEnabled(true);
-    void Promise.all(media.map((element) => playRemoteMedia(element))).then((results) => {
-      setSoundNeedsTap(results.some((playing) => !playing));
-    });
-  };
-
-  const addCameraTrack = async () => {
-    const { stream: cameraStream, track: videoTrack } = await requestCameraTrack();
-
-    if (!localStreamRef.current) {
-      localStreamRef.current = new MediaStream();
-    }
-
-    localStreamRef.current.addTrack(videoTrack);
-    Object.values(peersRef.current).forEach((peer) => peer.addTrack(videoTrack, localStreamRef.current as MediaStream));
-    if (localVideoRef.current) {
-      localVideoRef.current.srcObject = localStreamRef.current;
-    }
-  };
-
-  const toggleVideo = async () => {
-    const next = !videoEnabled;
-    if (next && localStreamRef.current?.getVideoTracks().length === 0) {
-      try {
-        await addCameraTrack();
-        setCallKind("video");
-        setVideoEnabled(true);
-        await Promise.all(Object.keys(peersRef.current).map((id) => renegotiate(Number(id), "video")));
-      } catch (error) {
-        toast({ title: "Ошибка звонка", description: getMediaErrorMessage(error), variant: "destructive" });
-      }
-      return;
-    }
-
-    localStreamRef.current?.getVideoTracks().forEach((track) => {
-      track.enabled = next;
-    });
-    setVideoEnabled(next);
-    if (next) {
-      setCallKind("video");
-      await Promise.all(Object.keys(peersRef.current).map((id) => renegotiate(Number(id), "video")));
-    }
-  };
-
-  // APP_FIX: removable-screen-track
-  const stopScreenShare = async () => {
-    const senders = screenSendersRef.current;
-    for (const [peerId, sender] of Object.entries(senders)) {
-      const peer = peersRef.current[Number(peerId)];
-      if (peer && peer.signalingState !== 'closed') {
-        try { peer.removeTrack(sender); } catch {}
-      }
-    }
-    screenSendersRef.current = {};
-    screenStreamRef.current?.getTracks().forEach((track) => track.stop());
-    screenStreamRef.current = null;
-    if (localScreenVideoRef.current) localScreenVideoRef.current.srcObject = null;
-    setScreenEnabled(false);
-    await Promise.all(Object.keys(peersRef.current).map((id) => renegotiate(Number(id))));
-  };
-
-  const toggleScreenShare = async () => {
-    if (screenEnabled) {
-      await stopScreenShare();
-      return;
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
-      const [track] = stream.getVideoTracks();
-      if (!track) return;
-      screenStreamRef.current = stream;
-      screenSendersRef.current = {};
-
-      for (const [peerId, peer] of Object.entries(peersRef.current)) {
-        screenSendersRef.current[Number(peerId)] = peer.addTrack(track, stream);
-      }
-
-      track.onended = () => { void stopScreenShare(); };
-      setScreenEnabled(true);
-      if (localScreenVideoRef.current) {
-        localScreenVideoRef.current.srcObject = stream;
-        localScreenVideoRef.current.play().catch(() => undefined);
-      }
-      await Promise.all(Object.keys(peersRef.current).map((id) => renegotiate(Number(id))));
-    } catch {
-      toast({ title: 'Демонстрация экрана', description: 'Не удалось начать демонстрацию экрана', variant: 'destructive' });
-    }
-  };
-
-  useEffect(() => {
-    const handleDeviceTestStart = () => {
-      if (!isCalling || deviceTestMuteRef.current) return;
-      deviceTestMuteRef.current = { mic: micEnabled, sound: soundEnabled };
-      localStreamRef.current?.getAudioTracks().forEach((track) => {
-        track.enabled = false;
-      });
-      remoteMediaRef.current?.querySelectorAll<HTMLMediaElement>("audio, video").forEach((media) => {
-        media.muted = true;
-      });
-      setMicEnabled(false);
-      setSoundEnabled(false);
-    };
-
-    const handleDeviceTestStop = () => {
-      const previous = deviceTestMuteRef.current;
-      if (!previous) return;
-      localStreamRef.current?.getAudioTracks().forEach((track) => {
-        track.enabled = previous.mic;
-      });
-      remoteMediaRef.current?.querySelectorAll<HTMLMediaElement>("audio, video").forEach((media) => {
-        media.muted = !previous.sound;
-      });
-      setMicEnabled(previous.mic);
-      setSoundEnabled(previous.sound);
-      deviceTestMuteRef.current = null;
-    };
-
-    window.addEventListener("itbird-microphone-test-start", handleDeviceTestStart);
-    window.addEventListener("itbird-microphone-test-stop", handleDeviceTestStop);
-
-    return () => {
-      window.removeEventListener("itbird-microphone-test-start", handleDeviceTestStart);
-      window.removeEventListener("itbird-microphone-test-stop", handleDeviceTestStop);
-    };
-  }, [isCalling, micEnabled, soundEnabled]);
-
-  useEffect(() => {
-    if (!isCalling) return;
-    const timer = window.setInterval(() => { void repairLocalMicrophone(); }, 2500);
-    const handleDeviceChange = () => { void repairLocalMicrophone(); };
-    navigator.mediaDevices?.addEventListener?.('devicechange', handleDeviceChange);
-    return () => {
-      window.clearInterval(timer);
-      navigator.mediaDevices?.removeEventListener?.('devicechange', handleDeviceChange);
-    };
-  }, [isCalling, micEnabled]);
-
-  const removeGroupPeer = (peerId: number) => {
-    peerWatchdogStopsRef.current[peerId]?.();
-    delete peerWatchdogStopsRef.current[peerId];
-    peersRef.current[peerId]?.close();
-    delete peersRef.current[peerId];
-    delete localAudioSendersRef.current[peerId];
-    delete remoteAudioTracksRef.current[peerId];
-    delete relayAudioSendersRef.current[peerId];
-    delete relayNeedsRenegotiationRef.current[peerId];
-    delete pendingIceByPeerRef.current[peerId];
-    setParticipantSpeaking(peerId, false);
-  };
-
-  const endCall = () => {
-    liveCallRef.current = false;
-    const windowWithCall = window as ActiveCallWindow;
-    if (windowWithCall.__itbirdActiveCallEnd === endCall) delete windowWithCall.__itbirdActiveCallEnd;
-    delete windowWithCall.__itbirdActiveCallToggleMic;
-    delete windowWithCall.__itbirdActiveCallToggleSound;
-    delete windowWithCall.__itbirdActiveCallToggleVideo;
-    delete windowWithCall.__itbirdActiveCallToggleScreen;
-    const targetIds = Array.from(new Set([
-      ...Object.keys(peersRef.current).map(Number),
-      ...callTargets.map(Number),
-    ])).filter(Number.isFinite);
-    if (targetIds.length > 0) sendSignal("CALL_HANGUP", targetIds, { endForAll: true });
-    Object.values(peersRef.current).forEach((peer) => peer.close());
-    peersRef.current = {};
-    Object.values(peerWatchdogStopsRef.current).forEach((stop) => stop());
-    peerWatchdogStopsRef.current = {};
-    Object.values(speakingMonitorStopsRef.current).forEach((stop) => stop());
-    speakingMonitorStopsRef.current = {};
-    Object.values(remoteAudioPlaybackStopsRef.current).forEach((stop) => stop());
-    remoteAudioPlaybackStopsRef.current = {};
-    blockedAudioKeysRef.current.clear();
-    localAudioSendersRef.current = {};
-    remoteAudioTracksRef.current = {};
-    relayAudioSendersRef.current = {};
-    relayNeedsRenegotiationRef.current = {};
-    screenSendersRef.current = {};
-    pendingIceByPeerRef.current = {};
-    localStreamRef.current?.getTracks().forEach((track) => track.stop());
-    screenStreamRef.current?.getTracks().forEach((track) => track.stop());
-    localStreamRef.current = null;
-    screenStreamRef.current = null;
-    remoteMediaRef.current?.replaceChildren();
-    document.getElementById("itbird-global-call-media")?.replaceChildren();
-    setIsCalling(false);
-    setSpeakingUserIds([]);
-    setSoundNeedsTap(false);
-    setVideoEnabled(false);
-    setScreenEnabled(false);
-    window.dispatchEvent(new CustomEvent("itbird-call-ended", {
-      detail: { chatId, mode, source: "VoiceCallControls" },
-    }));
-  };
-
-  useEffect(() => {
-    if (!isCalling) return;
-    const windowWithCall = window as ActiveCallWindow;
-    windowWithCall.__itbirdActiveCallEnd = endCall;
-    windowWithCall.__itbirdActiveCallToggleMic = toggleMic;
-    windowWithCall.__itbirdActiveCallToggleSound = toggleSound;
-    windowWithCall.__itbirdActiveCallToggleVideo = () => {
-      void toggleVideo();
-    };
-    windowWithCall.__itbirdActiveCallToggleScreen = () => {
-      void toggleScreenShare();
-    };
-    window.dispatchEvent(new CustomEvent("itbird-call-active", {
-      detail: { chatId, mode, title, callKind, targetIds: callTargets, participants: visibleCallParticipants },
-    }));
-    return () => {
-      if (!isCallingRef.current && windowWithCall.__itbirdActiveCallEnd === endCall) {
-        delete windowWithCall.__itbirdActiveCallEnd;
-        delete windowWithCall.__itbirdActiveCallToggleMic;
-        delete windowWithCall.__itbirdActiveCallToggleSound;
-        delete windowWithCall.__itbirdActiveCallToggleVideo;
-        delete windowWithCall.__itbirdActiveCallToggleScreen;
-      }
-    };
-  }, [isCalling, chatId, mode, title, callKind, callTargets.join(","), visibleCallParticipants.length, micEnabled, soundEnabled, videoEnabled, screenEnabled]);
-
-  useEffect(() => {
-    if (!token || !currentUserId) return;
-
-    const socket = createReconnectingWebSocket(getWsUrl());
-    socketRef.current = socket;
-    socket.onopen = () => socket.send(JSON.stringify({ type: "AUTH", token }));
-    socket.onmessage = async (event) => {
-      const payload = JSON.parse(event.data);
-      if (!payload.type?.startsWith("CALL_")) return;
-
-      const data = payload.data || {};
-      if (data.senderId === currentUserId) return;
-      if (!data.targetIds?.includes(currentUserId)) return;
-      if (String(data.chatId) !== String(chatId) || data.mode !== mode) return;
-
-      if (payload.type === "CALL_ACCEPT") {
-        liveCallRef.current = true;
-        setIsCalling(true);
-      }
-
-      if (payload.type === "CALL_ANSWER") {
-        const peer = peersRef.current[data.senderId];
-        if (peer && data.description) {
-          await peer.setRemoteDescription(new RTCSessionDescription(data.description));
-          for (const candidate of pendingIceByPeerRef.current[data.senderId] || []) {
-            await peer.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => undefined);
-          }
-          delete pendingIceByPeerRef.current[data.senderId];
-          if (relayNeedsRenegotiationRef.current[data.senderId] && peer.signalingState === 'stable') {
-            relayNeedsRenegotiationRef.current[data.senderId] = false;
-            await renegotiate(data.senderId);
-          }
-        }
-      }
-
-      if (payload.type === "CALL_OFFER") {
-        const peer = peersRef.current[data.senderId];
-        if (peer && data.description) {
-          liveCallRef.current = true;
-          setIsCalling(true);
-          await peer.setRemoteDescription(new RTCSessionDescription(data.description));
-          const answer = await peer.createAnswer();
-          await peer.setLocalDescription(answer);
-          sendSignal("CALL_ANSWER", [data.senderId], {
-            description: answer,
-            callKind: data.callKind || callKind,
-            isRenegotiation: true,
-          });
-        }
-      }
-
-      if (payload.type === "CALL_ICE") {
-        const peer = peersRef.current[data.senderId];
-        if (peer && data.candidate) {
-          if (peer.remoteDescription) {
-            await peer.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(() => undefined);
-          } else {
-            pendingIceByPeerRef.current[data.senderId] ||= [];
-            pendingIceByPeerRef.current[data.senderId].push(data.candidate);
-          }
-        }
-      }
-
-      if (payload.type === "CALL_HANGUP") {
-        if (mode === 'group' && !data.endForAll) {
-          removeGroupPeer(Number(data.senderId));
-        } else {
-          endCall();
-        }
-      }
-    };
-
-    return () => {
-      if (isCallingRef.current || liveCallRef.current || localStreamRef.current || Object.keys(peersRef.current).length > 0) return;
-      socket.close();
-      endCall();
-    };
-  }, [token, currentUserId, chatId, mode]);
-
-  const callButton = (kind: CallKind) => (
-    <Button
-      variant={kind === "video" ? "outline" : "ghost"}
-      size="sm"
-      onClick={() => (mode === "group" ? (setCallKind(kind), setShowPicker(true)) : startCall(callTargets, kind))}
-      disabled={callableParticipants.length === 0}
-      className="gap-2"
-      title={kind === "video" ? "Видеозвонок" : "Голосовой звонок"}
-    >
-      {kind === "video" ? <Video className="h-4 w-4" /> : <Phone className="h-4 w-4" />}
-    </Button>
+  const [kind, setKind] = useState<CallKind>("voice");
+
+  const callableParticipants = useMemo(
+    () => participants.filter((participant) => Number(participant.id) !== Number(currentUserId)),
+    [currentUserId, participants],
   );
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+
+  useEffect(() => {
+    setSelectedIds(callableParticipants.map((participant) => Number(participant.id)));
+  }, [callableParticipants.map((participant) => participant.id).join(",")]);
+
+  const busy = Boolean(call || incoming);
+
+  const begin = async (nextKind: CallKind) => {
+    const targetIds = mode === "private"
+      ? callableParticipants.map((participant) => Number(participant.id))
+      : selectedIds;
+    if (targetIds.length === 0) return;
+    await startCall({
+      mode,
+      chatId,
+      title,
+      kind: nextKind,
+      targetIds,
+      participants: callableParticipants.filter((participant) => targetIds.includes(Number(participant.id))),
+    });
+    setShowPicker(false);
+  };
+
+  const open = (nextKind: CallKind) => {
+    if (busy) return;
+    if (mode === "group") {
+      setKind(nextKind);
+      setShowPicker(true);
+      return;
+    }
+    void begin(nextKind);
+  };
 
   return (
     <>
-      {!isCalling ? (
-        <div className="flex items-center gap-1">
-          {callButton("voice")}
-          {callButton("video")}
-        </div>
-      ) : (
-        <div className="itbird-call-panel fixed inset-x-0 z-50 mx-auto flex max-h-[calc(var(--app-viewport-height)-2rem-var(--mobile-safe-bottom))] w-[min(760px,calc(100vw-16px))] flex-col items-center gap-3 overflow-y-auto overflow-x-hidden rounded-2xl border border-white/10 bg-black/90 p-3 text-white shadow-2xl sm:w-[min(760px,calc(100vw-24px))] sm:gap-4 sm:p-4">
-          <div className="flex w-full items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="truncate text-sm font-semibold">{title}</div>
-              <div className="text-xs text-white/60">{mode === "group" ? "Групповой звонок" : "Личный звонок"}</div>
-            </div>
-            <div className="itbird-call-participants flex min-w-0 flex-wrap items-center justify-end gap-2">
-              {visibleCallParticipants.map((participant) => (
-                <div key={participant.id} className="flex flex-col items-center gap-1">
-                  <div className="relative">
-                    <img
-                      src={getAvatarUrl(participant.avatar)}
-                      alt={participant.username}
-                      className={`h-12 w-12 rounded-full border-2 bg-gray-800 object-cover transition-all ${speakingUserIds.includes(Number(participant.id)) ? 'border-emerald-400 ring-4 ring-emerald-400/35 shadow-[0_0_18px_rgba(52,211,153,0.45)]' : 'border-white/20'}`}
-                    />
-                    {speakingUserIds.includes(Number(participant.id)) && (
-                      <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 rounded-full bg-emerald-500 px-1.5 py-0.5 text-[9px] font-semibold text-black">Говорит</span>
-                    )}
-                  </div>
-                  <span className="max-w-16 truncate text-[11px] text-white/70">{participant.username}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div ref={remoteMediaRef} className="grid w-full min-w-0 grid-cols-1 place-items-center gap-2 sm:grid-cols-2" />
-
-          {/* APP_FIX: self-video-and-screen-preview */}
-          {(videoEnabled || screenEnabled) && (
-            <div className="flex w-full flex-wrap justify-center gap-3">
-              {videoEnabled && (
-                <div className="space-y-1 text-center">
-                  <div className="text-[11px] text-white/60">Вы — камера</div>
-                  <video ref={localVideoRef} autoPlay muted playsInline className="h-28 w-44 rounded-lg bg-gray-950 object-cover" />
-                </div>
-              )}
-              {screenEnabled && (
-                <div className="space-y-1 text-center">
-                  <div className="text-[11px] text-white/60">Вы — демонстрация экрана</div>
-                  <video ref={localScreenVideoRef} autoPlay muted playsInline className="h-28 w-44 rounded-lg bg-gray-950 object-contain" />
-                </div>
-              )}
-            </div>
-          )}
-
-          {soundNeedsTap && (
-            <Button type="button" variant="secondary" size="sm" onClick={forceEnableRemoteSound} className="w-full sm:w-auto">
-              Нажмите, чтобы включить звук собеседника
-            </Button>
-          )}
-
-          <div className="flex flex-wrap items-center justify-center gap-2">
-            <div className="flex overflow-hidden rounded-lg border border-white/10 bg-white/10">
-              <Button variant="ghost" size="sm" onClick={toggleMic} className="rounded-none text-white hover:bg-white/15 hover:text-white">
-                {micEnabled ? <Mic className="h-4 w-4" /> : <MicOff className="h-4 w-4 text-red-300" />}
-              </Button>
-              <Button variant="ghost" size="sm" className="rounded-none px-2 text-white hover:bg-white/15 hover:text-white">
-                <ChevronDown className="h-4 w-4" />
-              </Button>
-            </div>
-
-            <div className="flex overflow-hidden rounded-lg border border-white/10 bg-white/10">
-              <Button variant="ghost" size="sm" onClick={toggleVideo} className="rounded-none text-white hover:bg-white/15 hover:text-white">
-                {videoEnabled ? <Video className="h-4 w-4" /> : <VideoOff className="h-4 w-4 text-red-300" />}
-              </Button>
-              <Button variant="ghost" size="sm" className="rounded-none px-2 text-white hover:bg-white/15 hover:text-white">
-                <ChevronDown className="h-4 w-4" />
-              </Button>
-            </div>
-
-            <div className="flex overflow-hidden rounded-lg border border-white/10 bg-white/10">
-              <Button variant="ghost" size="sm" onClick={toggleSound} className="rounded-none text-white hover:bg-white/15 hover:text-white">
-                {soundEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4 text-red-300" />}
-              </Button>
-              <Button variant="ghost" size="sm" className="rounded-none px-2 text-white hover:bg-white/15 hover:text-white">
-                <Headphones className="h-4 w-4" />
-              </Button>
-            </div>
-
-            <Button variant="ghost" size="sm" onClick={toggleScreenShare} className="bg-white/10 text-white hover:bg-white/15 hover:text-white">
-              {screenEnabled ? <ScreenShareOff className="h-4 w-4" /> : <ScreenShare className="h-4 w-4" />}
-            </Button>
-
-            <Button variant="destructive" size="sm" onClick={endCall} className="px-6">
-              <PhoneOff className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
-      )}
+      <div className="flex items-center gap-1">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={busy || callableParticipants.length === 0}
+          onClick={() => open("voice")}
+          className="gap-2"
+          title={busy ? "Уже есть активный звонок" : "Голосовой звонок"}
+        >
+          <Phone className="h-4 w-4" />
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={busy || callableParticipants.length === 0}
+          onClick={() => open("video")}
+          className="gap-2"
+          title={busy ? "Уже есть активный звонок" : "Видеозвонок"}
+        >
+          <Video className="h-4 w-4" />
+        </Button>
+      </div>
 
       <Dialog open={showPicker} onOpenChange={setShowPicker}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              {callKind === "video" ? <Video className="h-5 w-5" /> : <Users className="h-5 w-5" />}
+              {kind === "video" ? <Video className="h-5 w-5" /> : <Users className="h-5 w-5" />}
               Выберите участников звонка
             </DialogTitle>
           </DialogHeader>
           <div className="max-h-72 space-y-3 overflow-y-auto">
-            {callableParticipants.map((participant) => (
-              <label key={participant.id} className="flex items-center gap-3 rounded-md border p-3">
-                <Checkbox
-                  checked={selectedIds.includes(participant.id)}
-                  onCheckedChange={(checked) => {
-                    setSelectedIds((prev) =>
-                      checked ? [...prev, participant.id] : prev.filter((id) => id !== participant.id)
-                    );
-                  }}
-                />
-                <span>{participant.username}</span>
-              </label>
-            ))}
+            {callableParticipants.map((participant) => {
+              const id = Number(participant.id);
+              return (
+                <label key={id} className="flex cursor-pointer items-center gap-3 rounded-md border p-3">
+                  <Checkbox
+                    checked={selectedIds.includes(id)}
+                    onCheckedChange={(checked) => {
+                      setSelectedIds((current) => checked
+                        ? Array.from(new Set([...current, id]))
+                        : current.filter((item) => item !== id));
+                    }}
+                  />
+                  <span className="min-w-0 truncate">{participant.username}</span>
+                </label>
+              );
+            })}
           </div>
           <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setShowPicker(false)}>Отмена</Button>
-            <Button onClick={() => startCall(callTargets, callKind)} disabled={callTargets.length === 0} className="gap-2">
+            <Button type="button" variant="outline" onClick={() => setShowPicker(false)}>Отмена</Button>
+            <Button
+              type="button"
+              onClick={() => void begin(kind)}
+              disabled={selectedIds.length === 0 || busy}
+              className="gap-2"
+            >
               <PhoneCall className="h-4 w-4" />
               Позвонить
             </Button>
