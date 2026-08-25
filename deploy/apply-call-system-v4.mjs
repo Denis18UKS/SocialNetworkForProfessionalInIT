@@ -47,27 +47,48 @@ if (!provider.includes(nativeRuntimeMarker)) {
 if (provider !== providerBefore) fs.writeFileSync(providerFile, provider, 'utf8');
 
 // -----------------------------------------------------------------------------
-// 3. Durable mobile signaling. A sleeping Android/WebView socket can remain in the
-// server presence map even though JS cannot consume INVITE/OFFER/ICE. V4 stores the
-// short signaling path for every target and replays it only to the single call-host.
+// 3. Durable mobile signaling. Also migrate installations that already contain the
+// old SOCIAL_NEXT / MOBILE_CALL_DELIVERY queue patches without duplicating vars,
+// queue writes, replay or registration.
 // -----------------------------------------------------------------------------
 const queueFile = 'backend/offline-call-queue.js';
 let queue = normalize(fs.readFileSync(queueFile, 'utf8'));
+const durableMarker = '// SOCIALBIRD_CALL_SYSTEM_V4: durable-signals';
 
-if (!queue.includes('SOCIALBIRD_CALL_SYSTEM_V4: durable-signals')) {
+if (!queue.includes(durableMarker)) {
   const oldTargets = `            if (!['CALL_INVITE', 'CALL_OFFER', 'CALL_ICE', 'CALL_RELAY_TRACK'].includes(type)) return;\n            const offlineTargets = uniqueTargets.filter((userId) => !isUserOnline(userId));\n            if (offlineTargets.length === 0) return;\n\n            for (const targetUserId of offlineTargets) {`;
-  const durableTargets = `            if (!['CALL_INVITE', 'CALL_OFFER', 'CALL_ICE', 'CALL_RELAY_TRACK'].includes(type)) return;\n\n            // SOCIALBIRD_CALL_SYSTEM_V4: durable-signals\n            // Persist even when presence says online: suspended mobile WebViews can\n            // leave an OPEN socket behind while no JavaScript is actually consuming it.\n            for (const targetUserId of uniqueTargets) {`;
-  if (!queue.includes(oldTargets)) throw new Error('Call system V4 queue patch failed: target selection');
-  queue = queue.replace(oldTargets, durableTargets);
+  const durableTargets = `            if (!['CALL_INVITE', 'CALL_OFFER', 'CALL_ICE', 'CALL_RELAY_TRACK'].includes(type)) return;\n\n            ${durableMarker}\n            // Persist even when presence says online: suspended mobile WebViews can\n            // leave an OPEN socket behind while no JavaScript is actually consuming it.\n            for (const targetUserId of uniqueTargets) {`;
+
+  if (queue.includes(oldTargets)) {
+    queue = queue.replace(oldTargets, durableTargets);
+  } else if (queue.includes('MOBILE_CALL_DELIVERY_FIX: durable-signals')
+      && queue.includes('for (const targetUserId of uniqueTargets) {')) {
+    queue = queue.replace(
+      '// MOBILE_CALL_DELIVERY_FIX: durable-signals',
+      `// MOBILE_CALL_DELIVERY_FIX: durable-signals\n            ${durableMarker}`,
+    );
+  } else {
+    const uniqueLoop = '            for (const targetUserId of uniqueTargets) {';
+    if (!queue.includes(uniqueLoop)) throw new Error('Call system V4 queue patch failed: target selection');
+    queue = queue.replace(uniqueLoop, `            ${durableMarker}\n${uniqueLoop}`);
+  }
 }
 
-if (!queue.includes('SOCIALBIRD_CALL_SYSTEM_V4: accepted-call-cleanup')) {
-  const expiryLine = `            await db.query('DELETE FROM pending_call_signals WHERE expires_at <= NOW()');`;
-  const firstIndex = queue.indexOf(expiryLine, queue.indexOf('const queueOfflineCallSignal'));
-  if (firstIndex < 0) throw new Error('Call system V4 queue patch failed: cleanup anchor');
-  const insertAt = firstIndex + expiryLine.length;
-  const cleanup = `\n\n            // SOCIALBIRD_CALL_SYSTEM_V4: accepted-call-cleanup\n            // A callee answering/accepting carries initiatorId. Remove caller -> callee\n            // durable rows immediately so a later reconnect cannot resurrect the call.\n            const originalCallerId = Number(data?.initiatorId || data?.originalCallerId || data?.senderId);\n            if (['CALL_ACCEPT', 'CALL_ANSWER', 'CALL_HANGUP'].includes(type)\n                && originalCallerId > 0\n                && originalCallerId !== Number(senderId)) {\n                const incomingCallKey = buildCallKey(originalCallerId, data);\n                await db.query(\n                    'DELETE FROM pending_call_signals WHERE target_user_id = ? AND sender_user_id = ? AND call_key = ?',\n                    [Number(senderId), originalCallerId, incomingCallKey]\n                );\n            }`;
-  queue = `${queue.slice(0, insertAt)}${cleanup}${queue.slice(insertAt)}`;
+const cleanupMarker = '// SOCIALBIRD_CALL_SYSTEM_V4: accepted-call-cleanup';
+const newCleanup = `            ${cleanupMarker}\n            // A callee answering/accepting carries initiatorId. Remove caller -> callee\n            // durable rows immediately so a later reconnect cannot resurrect the call.\n            const originalCallerId = Number(data?.initiatorId || data?.originalCallerId || data?.senderId);\n            if (['CALL_ACCEPT', 'CALL_ANSWER', 'CALL_HANGUP'].includes(type)\n                && originalCallerId > 0\n                && originalCallerId !== Number(senderId)) {\n                const incomingCallKey = buildCallKey(originalCallerId, data);\n                await db.query(\n                    'DELETE FROM pending_call_signals WHERE target_user_id = ? AND sender_user_id = ? AND call_key = ?',\n                    [Number(senderId), originalCallerId, incomingCallKey]\n                );\n            }`;
+
+if (!queue.includes(cleanupMarker)) {
+  const legacyCleanup = `            // MOBILE_CALL_DELIVERY_FIX: clear-accepted-incoming-signals\n            // CALL_ANSWER/HANGUP sent by the callee contains the original caller id in\n            // data.senderId. Remove the caller -> callee durable invite/offer/ICE rows\n            // so a later reconnect cannot resurrect an already answered/ended call.\n            const originalCallerId = Number(data?.senderId);\n            if (['CALL_ANSWER', 'CALL_HANGUP'].includes(type) && originalCallerId && originalCallerId !== Number(senderId)) {\n                const incomingCallKey = buildCallKey(originalCallerId, data);\n                await db.query(\n                    'DELETE FROM pending_call_signals WHERE target_user_id = ? AND sender_user_id = ? AND call_key = ?',\n                    [Number(senderId), originalCallerId, incomingCallKey]\n                );\n            }`;
+
+  if (queue.includes(legacyCleanup)) {
+    queue = queue.replace(legacyCleanup, newCleanup);
+  } else {
+    const expiryLine = `            await db.query('DELETE FROM pending_call_signals WHERE expires_at <= NOW()');`;
+    const firstIndex = queue.indexOf(expiryLine, queue.indexOf('const queueOfflineCallSignal'));
+    if (firstIndex < 0) throw new Error('Call system V4 queue patch failed: cleanup anchor');
+    const insertAt = firstIndex + expiryLine.length;
+    queue = `${queue.slice(0, insertAt)}\n\n${newCleanup}${queue.slice(insertAt)}`;
+  }
 }
 fs.writeFileSync(queueFile, queue, 'utf8');
 
@@ -83,39 +104,62 @@ if (!server.includes("registerOfflineCallQueue")) {
   );
 }
 
-if (!server.includes('SOCIALBIRD_CALL_SYSTEM_V4: offline-call-function-refs')) {
-  const onlineAnchor = 'const isUserOnline = (userId) => onlineUsers.has(Number(userId));';
-  if (!server.includes(onlineAnchor)) throw new Error('Call system V4 backend patch failed: online predicate');
-  server = server.replace(
-    onlineAnchor,
-    `${onlineAnchor}\n// SOCIALBIRD_CALL_SYSTEM_V4: offline-call-function-refs\nlet queueOfflineCallSignal = async () => {};\nlet deliverPendingCallSignals = async () => {};`,
-  );
+const refsMarker = '// SOCIALBIRD_CALL_SYSTEM_V4: offline-call-function-refs';
+if (!server.includes(refsMarker)) {
+  if (server.includes('let queueOfflineCallSignal = async () => {};')
+      && server.includes('let deliverPendingCallSignals = async () => {};')) {
+    server = server.replace(
+      'let queueOfflineCallSignal = async () => {};',
+      `${refsMarker}\nlet queueOfflineCallSignal = async () => {};`,
+    );
+  } else {
+    const onlineAnchor = 'const isUserOnline = (userId) => onlineUsers.has(Number(userId));';
+    if (!server.includes(onlineAnchor)) throw new Error('Call system V4 backend patch failed: online predicate');
+    server = server.replace(
+      onlineAnchor,
+      `${onlineAnchor}\n${refsMarker}\nlet queueOfflineCallSignal = async () => {};\nlet deliverPendingCallSignals = async () => {};`,
+    );
+  }
 }
 
-if (!server.includes('SOCIALBIRD_CALL_SYSTEM_V4: call-host-replay')
-    && !server.includes('NATIVE_ANDROID: durable-call-replay-owner')) {
-  const roleAware = `                ws.clientRole = String(payload.clientRole || 'generic');\n                addOnlineSocket(decoded.id, ws);`;
-  const replay = `${roleAware}\n                // SOCIALBIRD_CALL_SYSTEM_V4: call-host-replay\n                if (ws.clientRole === 'call-host') {\n                    void deliverPendingCallSignals(decoded.id, ws);\n                }`;
-  if (!server.includes(roleAware)) throw new Error('Call system V4 backend patch failed: role-aware AUTH');
-  server = server.replace(roleAware, replay);
+const replayMarker = '// SOCIALBIRD_CALL_SYSTEM_V4: call-host-replay';
+if (!server.includes(replayMarker) && !server.includes('NATIVE_ANDROID: durable-call-replay-owner')) {
+  const legacyReplay = `                // SOCIAL_NEXT: replay-offline-call-signals\n                void deliverPendingCallSignals(decoded.id, ws);`;
+  const guarded = `                ${replayMarker}\n                if (ws.clientRole === 'call-host') {\n                    void deliverPendingCallSignals(decoded.id, ws);\n                }`;
+  if (server.includes(legacyReplay)) {
+    server = server.replace(legacyReplay, guarded);
+  } else {
+    const roleAware = `                ws.clientRole = String(payload.clientRole || 'generic');\n                addOnlineSocket(decoded.id, ws);`;
+    if (!server.includes(roleAware)) throw new Error('Call system V4 backend patch failed: role-aware AUTH');
+    server = server.replace(roleAware, `${roleAware}\n${guarded}`);
+  }
 }
 
-if (!server.includes('SOCIALBIRD_CALL_SYSTEM_V4: queue-call-signals')) {
-  const notifyBlock = `                notifyClients({\n                    type: payload.type,\n                    data: {\n                        ...payload.data,\n                        senderId: Number(ws.userId),\n                        targetIds,\n                    },\n                });`;
-  if (!server.includes(notifyBlock)) throw new Error('Call system V4 backend patch failed: CALL notify block');
-  server = server.replace(
-    notifyBlock,
-    `${notifyBlock}\n                // SOCIALBIRD_CALL_SYSTEM_V4: queue-call-signals\n                void queueOfflineCallSignal(payload.type, targetIds, payload.data || {}, Number(ws.userId));`,
-  );
+const queueMarker = '// SOCIALBIRD_CALL_SYSTEM_V4: queue-call-signals';
+if (!server.includes(queueMarker)) {
+  const existingQueueCall = '                void queueOfflineCallSignal(payload.type, targetIds, payload.data || {}, Number(ws.userId));';
+  if (server.includes(existingQueueCall)) {
+    server = server.replace(existingQueueCall, `                ${queueMarker}\n${existingQueueCall}`);
+  } else {
+    const notifyBlock = `                notifyClients({\n                    type: payload.type,\n                    data: {\n                        ...payload.data,\n                        senderId: Number(ws.userId),\n                        targetIds,\n                    },\n                });`;
+    if (!server.includes(notifyBlock)) throw new Error('Call system V4 backend patch failed: CALL notify block');
+    server = server.replace(
+      notifyBlock,
+      `${notifyBlock}\n                ${queueMarker}\n                void queueOfflineCallSignal(payload.type, targetIds, payload.data || {}, Number(ws.userId));`,
+    );
+  }
 }
 
-if (!server.includes('SOCIALBIRD_CALL_SYSTEM_V4: register-offline-call-queue')) {
-  const startAnchor = '// Старт сервера\n// PRODUCTION_HARDENING: configurable-listen-address';
-  if (!server.includes(startAnchor)) throw new Error('Call system V4 backend patch failed: server start anchor');
-  server = server.replace(
-    startAnchor,
-    `// SOCIALBIRD_CALL_SYSTEM_V4: register-offline-call-queue\n({ queueOfflineCallSignal, deliverPendingCallSignals } = registerOfflineCallQueue({ db, isUserOnline }));\n\n${startAnchor}`,
-  );
+const registrationMarker = '// SOCIALBIRD_CALL_SYSTEM_V4: register-offline-call-queue';
+if (!server.includes(registrationMarker)) {
+  const registration = '({ queueOfflineCallSignal, deliverPendingCallSignals } = registerOfflineCallQueue({ db, isUserOnline }));';
+  if (server.includes(registration)) {
+    server = server.replace(registration, `${registrationMarker}\n${registration}`);
+  } else {
+    const startAnchor = '// Старт сервера\n// PRODUCTION_HARDENING: configurable-listen-address';
+    if (!server.includes(startAnchor)) throw new Error('Call system V4 backend patch failed: server start anchor');
+    server = server.replace(startAnchor, `${registrationMarker}\n${registration}\n\n${startAnchor}`);
+  }
 }
 fs.writeFileSync(serverFile, server, 'utf8');
 
@@ -175,8 +219,8 @@ if (!realtime.includes(realtimeMarker)) throw new Error('Call system V4 realtime
 if (!server.includes('registerOfflineCallQueue') || !server.includes('queueOfflineCallSignal(payload.type')) {
   throw new Error('Call system V4 durable backend queue wiring missing');
 }
-if (!queue.includes('SOCIALBIRD_CALL_SYSTEM_V4: durable-signals')) {
+if (!queue.includes(durableMarker) || !queue.includes(cleanupMarker)) {
   throw new Error('Call system V4 durable queue policy missing');
 }
 
-console.log('Call system V4 applied: one CallProvider owns signaling/media, Android/PWA answers converge into it, mobile INVITE/OFFER/ICE are durable and legacy RealtimeNotifications CALL_* handling is disabled.');
+console.log('Call system V4 applied: one CallProvider owns signaling/media, Android/PWA answers converge into it, legacy queue patches migrate without duplication, mobile INVITE/OFFER/ICE are durable and legacy RealtimeNotifications CALL_* handling is disabled.');
