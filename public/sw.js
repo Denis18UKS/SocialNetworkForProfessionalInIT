@@ -130,7 +130,6 @@ self.addEventListener('message', (event) => {
   if (event.data?.type === 'SKIP_WAITING') void self.skipWaiting();
 });
 
-// Existing push-call support is preserved below.
 self.addEventListener('push', (event) => {
   let data = {};
   try {
@@ -143,7 +142,7 @@ self.addEventListener('push', (event) => {
     const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     const visible = windows.find((client) => client.visibilityState === 'visible' && client.focused !== false);
     if (visible && data.type === 'incoming-call') {
-      visible.postMessage({ type: 'ITBIRD_PUSH_CALL_VISIBLE', call: data.call || null });
+      visible.postMessage({ type: 'ITBIRD_PUSH_CALL_VISIBLE', action: 'open', call: data.call || null });
       return;
     }
 
@@ -181,6 +180,7 @@ self.addEventListener('notificationclick', (event) => {
   notification.close();
   if (action === 'dismiss') return;
 
+  const callAction = action === 'answer' ? 'answer' : 'open';
   const targetUrl = new URL(data.url || '/', self.location.origin).href;
   event.waitUntil((async () => {
     const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
@@ -188,10 +188,10 @@ self.addEventListener('notificationclick', (event) => {
     if (existing) {
       if ('navigate' in existing) await existing.navigate(targetUrl).catch(() => undefined);
       await existing.focus();
-      existing.postMessage({ type: 'ITBIRD_PUSH_CALL_OPEN', call: data.call || null });
+      existing.postMessage({ type: 'ITBIRD_PUSH_CALL_OPEN', action: callAction, call: data.call || null });
       return;
     }
     const opened = await self.clients.openWindow(targetUrl);
-    if (opened) opened.postMessage({ type: 'ITBIRD_PUSH_CALL_OPEN', call: data.call || null });
+    if (opened) opened.postMessage({ type: 'ITBIRD_PUSH_CALL_OPEN', action: callAction, call: data.call || null });
   })());
 });
