@@ -1,4 +1,3 @@
-const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { execFile, spawn } = require('child_process');
@@ -44,15 +43,22 @@ const runFfmpeg = (args) => new Promise((resolve, reject) => {
 
 const normalizedExt = (value) => path.extname(String(value || '')).toLowerCase();
 const compatibleMp4Audio = (audio) => !audio || audio.codec_name === 'aac';
-const compatibleWebmAudio = (audio) => !audio || ['opus', 'vorbis'].includes(audio.codec_name);
+const compatibleH264PixelFormat = (video) => ['yuv420p', 'yuvj420p'].includes(String(video?.pix_fmt || '').toLowerCase());
+const safeTargetName = (value) => {
+  const name = path.basename(String(value || ''));
+  return /^[a-zA-Z0-9._-]+\.mp4$/i.test(name) ? name : null;
+};
 
 const main = async () => {
   const initial = JSON.parse(await fs.promises.readFile(jobFile, 'utf8'));
+  const targetName = safeTargetName(initial.targetName);
+  if (!targetName) throw new Error('Некорректное имя целевого MP4-файла.');
+  const finalPath = path.join(mediaRoot, targetName);
   await writeStatus({ status: 'processing', stage: 'probe', complete: false, error: null });
 
   const { stdout } = await execFileAsync('ffprobe', [
     '-v', 'error',
-    '-show_entries', 'format=format_name,duration:stream=codec_type,codec_name',
+    '-show_entries', 'format=format_name,duration:stream=codec_type,codec_name,pix_fmt',
     '-of', 'json',
     sourcePath,
   ]);
@@ -63,36 +69,32 @@ const main = async () => {
   if (!video?.codec_name) throw new Error('Видео-поток не найден или формат не поддерживается FFmpeg.');
 
   const sourceExt = normalizedExt(initial.originalName || sourcePath);
-  const directMp4 = sourceExt === '.mp4' && video.codec_name === 'h264' && compatibleMp4Audio(audio);
-  const directWebm = sourceExt === '.webm'
-    && ['vp8', 'vp9', 'av1'].includes(video.codec_name)
-    && compatibleWebmAudio(audio);
+  const browserH264 = video.codec_name === 'h264' && compatibleH264PixelFormat(video);
+  const directMp4 = sourceExt === '.mp4' && browserH264 && compatibleMp4Audio(audio);
 
-  let finalName;
-  let finalPath;
   let recompressed = false;
+  let videoRecompressed = false;
+  let audioRecompressed = false;
   let remuxed = false;
   let conversionMode = 'none';
 
-  if (directMp4 || directWebm) {
-    const ext = directWebm ? '.webm' : '.mp4';
-    finalName = `${crypto.randomUUID()}${ext}`;
-    finalPath = path.join(mediaRoot, finalName);
+  if (directMp4) {
     await writeStatus({ status: 'processing', stage: 'finalize', conversionMode: 'none' });
+    await fs.promises.rm(finalPath, { force: true }).catch(() => undefined);
     await fs.promises.rename(sourcePath, finalPath);
   } else {
-    finalName = `${crypto.randomUUID()}.mp4`;
-    finalPath = path.join(mediaRoot, finalName);
-    const tempPath = path.join(mediaRoot, `.${finalName}.${process.pid}.tmp.mp4`);
-    const canCopyVideo = video.codec_name === 'h264';
+    const tempPath = path.join(mediaRoot, `.${targetName}.${process.pid}.tmp.mp4`);
+    const canCopyVideo = browserH264;
     const canCopyAudio = compatibleMp4Audio(audio);
-    recompressed = !canCopyVideo || !canCopyAudio;
+    videoRecompressed = !canCopyVideo;
+    audioRecompressed = Boolean(audio) && !canCopyAudio;
+    recompressed = videoRecompressed || audioRecompressed;
     remuxed = canCopyVideo && canCopyAudio;
     conversionMode = remuxed ? 'remux' : (canCopyVideo ? 'audio-transcode' : 'transcode');
     await writeStatus({ status: 'processing', stage: conversionMode, conversionMode });
 
     const args = [
-      '-hide_banner', '-loglevel', 'warning', '-y',
+      '-hide_banner', '-loglevel', 'warning', '-nostdin', '-y',
       '-i', sourcePath,
       '-map', '0:v:0', '-map', '0:a:0?',
       '-sn',
@@ -112,6 +114,7 @@ const main = async () => {
     args.push('-movflags', '+faststart', '-max_muxing_queue_size', '2048', tempPath);
     try {
       await runFfmpeg(args);
+      await fs.promises.rm(finalPath, { force: true }).catch(() => undefined);
       await fs.promises.rename(tempPath, finalPath);
       await fs.promises.rm(sourcePath, { force: true });
     } catch (error) {
@@ -125,14 +128,17 @@ const main = async () => {
     status: 'ready',
     stage: 'ready',
     complete: true,
-    mediaUrl: `/cinema/media/${finalName}`,
+    mediaUrl: `/cinema/media/${targetName}`,
     fileName: initial.originalName,
     fileSize: Number(stat.size),
-    mimeType: directWebm ? 'video/webm' : 'video/mp4',
+    mimeType: 'video/mp4',
     recompressed,
+    videoRecompressed,
+    audioRecompressed,
     remuxed,
     conversionMode,
     sourceVideoCodec: video.codec_name,
+    sourcePixelFormat: video.pix_fmt || null,
     sourceAudioCodec: audio?.codec_name || null,
     finishedAt: new Date().toISOString(),
   });
