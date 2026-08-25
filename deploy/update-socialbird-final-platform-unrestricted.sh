@@ -18,6 +18,7 @@ cd "$APP_DIR"
 sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   deploy/apply-call-system-v5.mjs \
   deploy/apply-call-system-v5-push-state-fix.mjs \
+  deploy/apply-call-system-v6-video-track.mjs \
   deploy/apply-cinema-unrestricted-storage.mjs \
   deploy/apply-cinema-format-normalization-v1.mjs \
   deploy/apply-cinema-existing-normalize-v1.mjs \
@@ -27,6 +28,7 @@ sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   backend/cinema-transcode-worker.js
 node --check deploy/apply-call-system-v5.mjs
 node --check deploy/apply-call-system-v5-push-state-fix.mjs
+node --check deploy/apply-call-system-v6-video-track.mjs
 node --check deploy/apply-cinema-unrestricted-storage.mjs
 node --check deploy/apply-cinema-format-normalization-v1.mjs
 node --check deploy/apply-cinema-existing-normalize-v1.mjs
@@ -35,7 +37,7 @@ node --check deploy/apply-cparty-session-media-change-v1.mjs
 node --check deploy/apply-cparty-participant-media-reload-v2.mjs
 node --check backend/cinema-transcode-worker.js
 
-# SOCIALBIRD_UNRESTRICTED_DEPLOY_V12
+# SOCIALBIRD_UNRESTRICTED_DEPLOY_V13
 # Remove only the artificial pre-deploy free-space gate. Backup, rollback, syntax
 # checks, frontend build, nginx, PM2 and smoke tests remain enabled.
 awk '
@@ -48,7 +50,7 @@ skipping { next }
 ' "$SOURCE" > "$TMP"
 
 # Extend the regular rollback set with files introduced by Call V4, then fetch those
-# files only after backup creation. Call V5 mutates CallProvider/GlobalCallOverlay,
+# files only after backup creation. Call V5/V6 mutate CallProvider/GlobalCallOverlay,
 # which are already in the regular rollback set.
 awk '
 /^BACKUP_FILES=\(/ {
@@ -81,10 +83,13 @@ awk '
   print
   print "sudo -u \"$APP_USER\" node deploy/apply-call-system-v5.mjs"
   print "sudo -u \"$APP_USER\" node deploy/apply-call-system-v5-push-state-fix.mjs"
+  print "sudo -u \"$APP_USER\" node deploy/apply-call-system-v6-video-track.mjs"
   print "grep -q \"SOCIALBIRD_CALL_SYSTEM_V5: defer-answer-until-ready\" src/components/call/CallProvider.tsx"
   print "grep -q \"SOCIALBIRD_CALL_SYSTEM_V5: real-webrtc-connected-state\" src/components/call/CallProvider.tsx"
   print "grep -q \"SOCIALBIRD_CALL_SYSTEM_V5: camera-renegotiation\" src/components/call/CallProvider.tsx"
   print "grep -q \"SOCIALBIRD_CALL_SYSTEM_V5: participant-volume-slider\" src/components/GlobalCallOverlay.tsx"
+  print "grep -q \"SOCIALBIRD_CALL_SYSTEM_V6: real-camera-sender\" src/components/call/CallProvider.tsx"
+  print "grep -q \"SOCIALBIRD_CALL_SYSTEM_V6: remote-video-unmute-refresh\" src/components/call/CallProvider.tsx"
   next
 }
 /sudo -u "\$APP_USER" node deploy\/apply-cparty-realtime-end-v1\.mjs/ {
@@ -107,6 +112,7 @@ echo "Older Admin Desktop clients remain upload-compatible during background con
 echo "C-Party custom-upload rooms can switch video during an active session."
 echo "C-Party participants force-reload the new media source in realtime and via polling fallback."
 echo "Unified Call System V5 enabled: reliable push-answer, real connected-state, video inside voice calls, camera resync and per-user volume."
+echo "Call System V6 enabled: real camera addTrack/removeTrack negotiation and remote video unmute recovery."
 echo "Call migration files are included in backup/rollback."
 echo "SocialBIRD offline shell/static/private-API cache support enabled."
 df -h "$APP_DIR" || true
