@@ -28,9 +28,10 @@ BACKUP_FILES=(
   backend/server.js backend/server.production.js
   backend/socialbird-final-platform.js backend/strict-privacy-gate.js backend/stable-news-time.js
   backend/cinema-qr.js backend/cinema-stream.js backend/admin-cinema-library.js backend/cinema-transcode-worker.js
-  src/App.tsx src/components/VoiceCallControls.tsx src/components/AppSidebar.tsx
-  src/components/CinemaQrScanner.tsx src/components/RealtimeNotifications.tsx
-  src/lib/call-audio-reliability.ts src/lib/cinema-upload.ts
+  src/App.tsx src/components/VoiceCallControls.tsx src/components/GlobalCallOverlay.tsx src/components/AppSidebar.tsx
+  src/components/call/CallProvider.tsx src/components/CinemaQrScanner.tsx src/components/RealtimeNotifications.tsx
+  src/lib/call-audio-reliability.ts src/lib/webrtc.ts src/lib/screen-share.ts src/lib/cinema-upload.ts
+  src/main.tsx src/lib/offline.ts public/sw.js public/manifest.webmanifest
   src/pages/GroupChats.tsx src/pages/Users.tsx src/pages/Settings.tsx src/pages/Login.tsx
   src/pages/AndroidApp.tsx src/pages/CinemaParty.tsx src/pages/CinemaPartyRoom.tsx src/styles/chat-platform-v1.css
 )
@@ -49,7 +50,7 @@ rollback() {
     rm -rf dist
     cp -al "$BACKUP_DIR/dist" dist
   fi
-  chown -R "$APP_USER:$APP_USER" backend src dist 2>/dev/null || true
+  chown -R "$APP_USER:$APP_USER" backend src public dist 2>/dev/null || true
   if [[ "$RESTARTED" -eq 1 ]]; then
     cd "$APP_HOME"
     sudo -u "$APP_USER" env PM2_HOME="$PM2_HOME_DIR" pm2 restart socialbird-api >/dev/null 2>&1 || true
@@ -69,12 +70,13 @@ sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   backend/socialbird-final-platform.js backend/strict-privacy-gate.js backend/stable-news-time.js \
   backend/cinema-qr.js backend/cinema-stream.js backend/admin-cinema-library.js backend/cinema-transcode-worker.js \
   admin-desktop/main.cjs admin-desktop/preload.cjs admin-desktop/renderer/cinema.js \
-  src/App.tsx src/components/VoiceCallControls.tsx src/components/GlobalCallOverlay.tsx \
-  src/components/StrictUserProfileRoute.tsx src/components/AppSidebar.tsx src/components/CinemaQrScanner.tsx \
-  src/lib/call-audio-reliability.ts src/lib/cinema-upload.ts \
+  src/App.tsx src/components/VoiceCallControls.tsx src/components/GlobalCallOverlay.tsx src/components/call/CallProvider.tsx \
+  src/components/RealtimeNotifications.tsx src/components/StrictUserProfileRoute.tsx src/components/AppSidebar.tsx src/components/CinemaQrScanner.tsx \
+  src/lib/call-audio-reliability.ts src/lib/webrtc.ts src/lib/screen-share.ts src/lib/cinema-upload.ts \
+  src/main.tsx src/lib/offline.ts public/sw.js public/manifest.webmanifest \
   src/pages/Login.tsx src/pages/EmailChange.tsx src/pages/ChatFolders.tsx src/pages/AndroidApp.tsx src/pages/CinemaParty.tsx src/pages/CinemaPartyRoom.tsx \
   src/pages/CinemaTitle.tsx src/pages/CinemaPerson.tsx \
-  deploy/apply-global-call-overlay-v1.mjs deploy/apply-socialbird-final-runtime-v1.mjs \
+  deploy/apply-call-system-v4.mjs deploy/apply-socialbird-final-runtime-v1.mjs \
   deploy/apply-cparty-realtime-end-v1.mjs \
   deploy/apply-cinema-format-normalization-v1.mjs deploy/apply-cinema-existing-normalize-v1.mjs deploy/apply-cinema-upload-compat-v1.mjs \
   deploy/harden-source.mjs deploy/enable-sandbox-compiler.mjs
@@ -83,8 +85,8 @@ echo "[2/10] Checking modules"
 for f in \
   backend/socialbird-final-platform.js backend/strict-privacy-gate.js backend/stable-news-time.js \
   backend/cinema-qr.js backend/cinema-stream.js backend/admin-cinema-library.js backend/cinema-transcode-worker.js \
-  deploy/apply-global-call-overlay-v1.mjs deploy/apply-socialbird-final-runtime-v1.mjs deploy/apply-cparty-realtime-end-v1.mjs \
-  deploy/apply-cinema-format-normalization-v1.mjs deploy/apply-cinema-existing-normalize-v1.mjs deploy/apply-cinema-upload-compat-v1.mjs; do
+  deploy/apply-call-system-v4.mjs deploy/apply-socialbird-final-runtime-v1.mjs deploy/apply-cparty-realtime-end-v1.mjs \
+  deploy/apply-cinema-format-normalization-v1.mjs deploy/apply-cinema-existing-normalize-v1.mjs deploy/apply-cinema-upload-compat-v1.mjs public/sw.js; do
   node --check "$f"
 done
 require_text backend/socialbird-final-platform.js "cinemaResumableUpload: true" "C-Party resumable upload"
@@ -95,19 +97,26 @@ require_text backend/admin-cinema-library.js "DISK_RESERVE_BYTES" "safe cinema d
 require_text backend/cinema-transcode-worker.js "libx264" "FFmpeg H.264 normalization worker"
 require_text src/lib/cinema-upload.ts "MAX_PARALLEL_CHUNKS = 4" "parallel C-Party uploads"
 require_text src/components/CinemaQrScanner.tsx "BarcodeDetector" "in-app C-Party QR scanner"
-require_text src/components/VoiceCallControls.tsx "CALL_RELIABILITY: persistent-audio-and-health" "canonical v4 call reliability source"
-require_text src/components/VoiceCallControls.tsx "APP_FIX: removable-screen-track" "canonical v4 screen sharing source"
+require_text src/components/call/CallProvider.tsx "export const CallProvider" "unified CallProvider"
+require_text src/components/call/CallProvider.tsx "CALL_SCREEN_START" "call screen-share signalling"
+require_text src/components/call/CallProvider.tsx "switchCamera" "live camera switching"
+require_text src/lib/webrtc.ts "CameraFacingMode" "front/back mobile camera support"
+require_text src/components/GlobalCallOverlay.tsx "Перевернуть камеру" "camera flip control"
+require_text src/components/GlobalCallOverlay.tsx "Говорит" "speaking indicator UI"
+require_text src/App.tsx "<CallProvider>" "global unified call manager mounted"
+require_text src/lib/offline.ts "SOCIALBIRD_OFFLINE_V1: client-bootstrap" "offline client bootstrap"
+require_text public/sw.js "ITBIRD_PUSH_CALL_OPEN" "push-call action bridge"
 require_text src/pages/AndroidApp.tsx "SocialBIRD-Android.apk" "Android stable download page"
 
 echo "[3/10] Applying final wiring"
-sudo -u "$APP_USER" node deploy/apply-global-call-overlay-v1.mjs
+sudo -u "$APP_USER" node deploy/apply-call-system-v4.mjs
 sudo -u "$APP_USER" node deploy/apply-socialbird-final-runtime-v1.mjs
 sudo -u "$APP_USER" node deploy/apply-cparty-realtime-end-v1.mjs
 sudo -u "$APP_USER" node deploy/apply-cinema-format-normalization-v1.mjs
 sudo -u "$APP_USER" node deploy/apply-cinema-existing-normalize-v1.mjs
 sudo -u "$APP_USER" node deploy/apply-cinema-upload-compat-v1.mjs
 
-echo "  Verifying patched backend syntax before build/restart"
+echo "  Verifying patched backend/frontend before build/restart"
 node --check backend/socialbird-final-platform.js
 node --check backend/admin-cinema-library.js
 node --check backend/cinema-transcode-worker.js
@@ -119,9 +128,10 @@ require_text backend/socialbird-final-platform.js "SOCIALBIRD_CPARTY_REALTIME_EN
 require_text backend/admin-cinema-library.js "CPARTY_FORMAT_NORMALIZATION_V1" "C-Party automatic video normalization"
 require_text backend/admin-cinema-library.js "CPARTY_EXISTING_NORMALIZE_V1" "existing-library video normalization"
 require_text backend/admin-cinema-library.js "CPARTY_UPLOAD_COMPAT_V1" "old Admin Desktop conversion compatibility"
+require_text src/components/RealtimeNotifications.tsx "SOCIALBIRD_CALL_SYSTEM_V4: CallProvider owns CALL_* signalling" "legacy call signalling disabled"
 require_text src/components/RealtimeNotifications.tsx "SOCIALBIRD_CPARTY_REALTIME_END_V1: websocket-bridge" "C-Party realtime websocket bridge"
 require_text src/pages/CinemaPartyRoom.tsx "SOCIALBIRD_CPARTY_REALTIME_END_V1: force-eject" "C-Party force eject on room end"
-require_text src/components/VoiceCallControls.tsx "SOCIALBIRD_GLOBAL_CALL_V1: persistent-call-state" "persistent global call"
+require_text src/components/call/CallProvider.tsx "itbird-native-call-action" "Android/PWA push answer reaches call manager"
 require_text src/App.tsx "<GlobalCallOverlay />" "global call overlay"
 require_text src/pages/GroupChats.tsx "messages/all-v2" "creator clear-all UI"
 require_text src/pages/Users.tsx "disabled={Boolean(user.restricted || user.profile_restricted)}" "restricted card actions disabled"
@@ -203,9 +213,9 @@ sudo -u "$APP_USER" env PM2_HOME="$PM2_HOME_DIR" pm2 save
 sudo -u "$APP_USER" env PM2_HOME="$PM2_HOME_DIR" pm2 status
 df -h "$APP_DIR"
 trap - ERR
-chown -R "$APP_USER:$APP_USER" backend src dist 2>/dev/null || true
+chown -R "$APP_USER:$APP_USER" backend src public dist 2>/dev/null || true
 
 echo
 echo "SocialBIRD final platform deployed successfully."
-echo "Included: global persistent calls/fullscreen streams, strict profiles, remove-friend flow, chat folders, verified email change, creator-only group clear, stable news time, C-Party QR/invite, realtime force-end/eject, faster uploads, automatic AVI/MKV/MOV/WMV/etc -> MP4 normalization, Android download page and Admin Cinema Library uploads."
+echo "Included: unified Call System V4 (voice/video, persistent overlay, speaking indicator, camera flip, mobile screen share and push-answer bridge), strict profiles, chat folders, verified email change, creator-only group clear, C-Party QR/invite, realtime room end, faster uploads, browser-compatible video normalization, offline cache and Android download page."
 echo "Backup: $BACKUP_DIR"
