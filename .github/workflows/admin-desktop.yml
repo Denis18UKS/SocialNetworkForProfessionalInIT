@@ -39,6 +39,7 @@ jobs:
       - name: Apply C-Party video format support
         working-directory: .
         run: |
+          node -e "const fs=require('fs'); for (const f of ['admin-desktop/main.cjs','admin-desktop/preload.cjs','admin-desktop/renderer/cinema.js']) { fs.writeFileSync(f, fs.readFileSync(f,'utf8').replace(/\r\n/g,'\n'),'utf8'); }"
           node --check deploy/apply-cinema-format-normalization-v1.mjs
           node --check deploy/apply-cinema-existing-normalize-v1.mjs
           node --check deploy/apply-cinema-desktop-format-v1.mjs
