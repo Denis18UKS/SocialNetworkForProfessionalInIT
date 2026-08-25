@@ -9,7 +9,7 @@ const runDesktopOnly = async (sourceFile) => {
     throw new Error(`Desktop-only C-Party patch wrapper: patchBackend() call not found in ${sourceFile}`);
   }
 
-  source = source.replace(/\npatchBackend\(\);\n/, '\n// Desktop-only build: backend patch intentionally skipped.\n');
+  source = source.replace('patchBackend();', '// Desktop-only build: backend patch intentionally skipped.');
 
   const tempPath = path.join(
     path.dirname(sourcePath),
