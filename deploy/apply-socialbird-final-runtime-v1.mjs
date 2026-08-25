@@ -141,8 +141,9 @@ const patchCinemaRoom = () => {
   let source = read(file);
   const bad = '      video.src = `${api}/cinema/stream/${roomId}${invite ? `?invite=${encodeURIComponent(invite)}` : ""}&t=${Date.now()}`;';
   const good = '      video.src = `${api}/cinema/stream/${roomId}?${invite ? `invite=${encodeURIComponent(invite)}&` : ""}t=${Date.now()}`;';
+  const current = '      const nextStream = `${api}/cinema/stream/${roomId}?${invite ? `invite=${encodeURIComponent(invite)}&` : ""}t=${Date.now()}`;';
   if (source.includes(bad)) source = source.replace(bad, good);
-  if (!source.includes(good)) throw new Error('Cinema episode stream URL verification failed');
+  if (!source.includes(good) && !source.includes(current)) throw new Error('Cinema episode stream URL verification failed');
 
   const authMarker = '// SOCIALBIRD_CPARTY_INVITE_V1: reauth-return';
   if (!source.includes(authMarker)) {
