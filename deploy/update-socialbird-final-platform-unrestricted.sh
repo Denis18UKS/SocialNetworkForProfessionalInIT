@@ -13,8 +13,9 @@ trap 'rm -f "$TMP" "$TMP2"' EXIT
 cd "$APP_DIR"
 [[ -f "$SOURCE" ]] || { echo "Missing $SOURCE" >&2; exit 1; }
 
-# Only patchers/workers are refreshed before the generated deployment starts.
-# Application/offline files are refreshed after the normal backup is created.
+# Only optional/unrestricted C-Party patchers are refreshed before the generated
+# deployment starts. Canonical application files are fetched by the normal updater
+# after its rollback backup is created.
 sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   deploy/apply-cinema-unrestricted-storage.mjs \
   deploy/apply-cinema-format-normalization-v1.mjs \
@@ -22,7 +23,6 @@ sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   deploy/apply-cinema-upload-compat-v1.mjs \
   deploy/apply-cparty-session-media-change-v1.mjs \
   deploy/apply-cparty-participant-media-reload-v2.mjs \
-  deploy/apply-global-call-overlay-v3.mjs \
   backend/cinema-transcode-worker.js
 node --check deploy/apply-cinema-unrestricted-storage.mjs
 node --check deploy/apply-cinema-format-normalization-v1.mjs
@@ -30,10 +30,11 @@ node --check deploy/apply-cinema-existing-normalize-v1.mjs
 node --check deploy/apply-cinema-upload-compat-v1.mjs
 node --check deploy/apply-cparty-session-media-change-v1.mjs
 node --check deploy/apply-cparty-participant-media-reload-v2.mjs
-node --check deploy/apply-global-call-overlay-v3.mjs
 node --check backend/cinema-transcode-worker.js
 
-# SOCIALBIRD_UNRESTRICTED_DEPLOY_V8
+# SOCIALBIRD_UNRESTRICTED_DEPLOY_V9
+# Remove only the artificial pre-deploy free-space gate. Normal backup, rollback,
+# syntax checks, frontend build, nginx, PM2 and smoke tests remain enabled.
 awk '
 BEGIN { skipping=0 }
 /^MIN_FREE_KB=/ { next }
@@ -43,18 +44,11 @@ skipping { next }
 { print }
 ' "$SOURCE" > "$TMP"
 
+# Add the user's unrestricted C-Party policy and the in-session media extensions.
+# Call System V4 is already canonical in the normal updater and is deliberately not
+# rewritten here.
 awk '
-/^BACKUP_FILES=\(/ {
-  print
-  print "  src/main.tsx public/sw.js public/manifest.webmanifest"
-  next
-}
 /^echo "\[2\/10\] Checking modules"/ {
-  print "sudo -u \"$APP_USER\" git checkout \"origin/$BRANCH\" -- src/components/RealtimeNotifications.tsx src/main.tsx src/lib/offline.ts public/sw.js public/manifest.webmanifest"
-  print "grep -Fq \"SOCIALBIRD_OFFLINE_V1: client-bootstrap\" src/lib/offline.ts"
-  print "grep -Fq \"installOfflineSupport();\" src/main.tsx"
-  print "grep -Fq \"SOCIALBIRD_OFFLINE_V1: shell-and-private-api-cache\" public/sw.js"
-  print "node --check public/sw.js"
   print "if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then"
   print "  export DEBIAN_FRONTEND=noninteractive"
   print "  apt-get update -qq"
@@ -68,10 +62,6 @@ awk '
   print "sudo -u \"$APP_USER\" node deploy/apply-cinema-unrestricted-storage.mjs"
   print "node --check backend/admin-cinema-library.js"
   print "node --check backend/cinema-transcode-worker.js"
-}
-/sudo -u "\$APP_USER" node deploy\/apply-global-call-overlay-v1\.mjs/ {
-  print "sudo -u \"$APP_USER\" node deploy/apply-global-call-overlay-v3.mjs"
-  next
 }
 /sudo -u "\$APP_USER" node deploy\/apply-cparty-realtime-end-v1\.mjs/ {
   print
@@ -92,7 +82,7 @@ echo "Existing incompatible C-Party media can be normalized without re-upload."
 echo "Older Admin Desktop clients remain upload-compatible during background conversion."
 echo "C-Party custom-upload rooms can switch video during an active session."
 echo "C-Party participants force-reload the new media source in realtime and via polling fallback."
-echo "Accepted incoming calls use the persistent GlobalCallOverlay V3."
+echo "Unified Call System V4 enabled: mobile controls, speaking indicator, camera flip, screen share and push-answer bridge."
 echo "SocialBIRD offline shell/static/private-API cache support enabled."
 df -h "$APP_DIR" || true
 exec bash "$TMP2"
