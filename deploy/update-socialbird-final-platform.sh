@@ -6,12 +6,23 @@ APP_USER="socialbird"
 APP_HOME="/var/lib/socialbird"
 PM2_HOME_DIR="/var/lib/socialbird/.pm2"
 BRANCH="deploy/socialbird-vps-production"
-BACKUP_DIR="/var/backups/socialbird/final-platform-$(date +%Y%m%d-%H%M%S)"
+BACKUP_ROOT="/var/backups/socialbird"
+BACKUP_DIR="$BACKUP_ROOT/final-platform-$(date +%Y%m%d-%H%M%S)"
 RESTARTED=0
+MIN_FREE_KB=$((1024 * 1024))
 
 [[ ${EUID} -eq 0 ]] || { echo "Run as root" >&2; exit 1; }
 cd "$APP_DIR"
-mkdir -p "$BACKUP_DIR"
+
+FREE_KB="$(df -Pk "$APP_DIR" | awk 'NR==2 {print $4}')"
+if [[ -z "$FREE_KB" || "$FREE_KB" -lt "$MIN_FREE_KB" ]]; then
+  echo "Not enough free disk space for a safe SocialBIRD deploy." >&2
+  echo "Required before deploy: at least 1 GiB free; current: $(( ${FREE_KB:-0} / 1024 )) MiB." >&2
+  echo "Inspect /var/backups/socialbird and old deployment backups first." >&2
+  exit 28
+fi
+
+mkdir -p "$BACKUP_ROOT" "$BACKUP_DIR"
 
 BACKUP_FILES=(
   backend/server.js backend/server.production.js
@@ -23,7 +34,9 @@ BACKUP_FILES=(
 for f in "${BACKUP_FILES[@]}"; do
   if [[ -f "$f" ]]; then mkdir -p "$BACKUP_DIR/$(dirname "$f")"; cp -a "$f" "$BACKUP_DIR/$f"; fi
 done
-if [[ -d dist ]]; then cp -a dist "$BACKUP_DIR/dist"; fi
+# Vite replaces dist during build; hard-linking preserves the previous inodes for rollback
+# without duplicating the whole frontend build on every failed deployment.
+if [[ -d dist ]]; then cp -al dist "$BACKUP_DIR/dist"; fi
 
 rollback() {
   echo "Final deploy failed; restoring backed-up production files..." >&2
@@ -31,7 +44,10 @@ rollback() {
   for f in "${BACKUP_FILES[@]}"; do
     if [[ -f "$BACKUP_DIR/$f" ]]; then mkdir -p "$(dirname "$f")"; cp -a "$BACKUP_DIR/$f" "$f"; fi
   done
-  if [[ -d "$BACKUP_DIR/dist" ]]; then cp -a "$BACKUP_DIR/dist/." dist/; fi
+  if [[ -d "$BACKUP_DIR/dist" ]]; then
+    rm -rf dist
+    cp -al "$BACKUP_DIR/dist" dist
+  fi
   chown -R "$APP_USER:$APP_USER" backend src dist 2>/dev/null || true
   if [[ "$RESTARTED" -eq 1 ]]; then
     cd "$APP_HOME"
