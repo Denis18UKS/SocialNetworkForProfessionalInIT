@@ -13,7 +13,7 @@ trap 'rm -f "$TMP" "$TMP2"' EXIT
 cd "$APP_DIR"
 [[ -f "$SOURCE" ]] || { echo "Missing $SOURCE" >&2; exit 1; }
 
-# Ensure deploy-time C-Party patchers and the detached transcoding worker are current.
+# Ensure deploy-time patchers and canonical files are current.
 sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   deploy/apply-cinema-unrestricted-storage.mjs \
   deploy/apply-cinema-format-normalization-v1.mjs \
@@ -21,6 +21,8 @@ sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   deploy/apply-cinema-upload-compat-v1.mjs \
   deploy/apply-cparty-session-media-change-v1.mjs \
   deploy/apply-cparty-participant-media-reload-v2.mjs \
+  deploy/apply-global-call-overlay-v3.mjs \
+  src/components/RealtimeNotifications.tsx \
   backend/cinema-transcode-worker.js
 node --check deploy/apply-cinema-unrestricted-storage.mjs
 node --check deploy/apply-cinema-format-normalization-v1.mjs
@@ -28,9 +30,10 @@ node --check deploy/apply-cinema-existing-normalize-v1.mjs
 node --check deploy/apply-cinema-upload-compat-v1.mjs
 node --check deploy/apply-cparty-session-media-change-v1.mjs
 node --check deploy/apply-cparty-participant-media-reload-v2.mjs
+node --check deploy/apply-global-call-overlay-v3.mjs
 node --check backend/cinema-transcode-worker.js
 
-# SOCIALBIRD_UNRESTRICTED_DEPLOY_V5
+# SOCIALBIRD_UNRESTRICTED_DEPLOY_V6
 # Remove only the artificial pre-deploy free-space gate. All normal build,
 # verification, rollback, nginx, PM2 and smoke-test checks stay enabled.
 awk '
@@ -42,17 +45,10 @@ skipping { next }
 { print }
 ' "$SOURCE" > "$TMP"
 
-# After the updater refreshes the canonical backend sources from GitHub:
-# 1) ensure FFmpeg/FFprobe exist,
-# 2) add automatic browser-compatible media normalization,
-# 3) add conversion controls for already-uploaded legacy media,
-# 4) preserve compatibility with old Admin Desktop clients,
-# 5) keep the user's unrestricted upload/storage defaults,
-# 6) after the realtime C-Party base patch, add in-session custom-video switching,
-# 7) force participant media elements to reload on source changes,
-# 8) syntax-check the resulting backend before later build/restart stages.
+# Extend the normal updater without modifying its safety/rollback behavior.
 awk '
 /^echo "\[2\/10\] Checking modules"/ {
+  print "sudo -u \"$APP_USER\" git checkout \"origin/$BRANCH\" -- src/components/RealtimeNotifications.tsx"
   print "if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then"
   print "  export DEBIAN_FRONTEND=noninteractive"
   print "  apt-get update -qq"
@@ -66,6 +62,10 @@ awk '
   print "sudo -u \"$APP_USER\" node deploy/apply-cinema-unrestricted-storage.mjs"
   print "node --check backend/admin-cinema-library.js"
   print "node --check backend/cinema-transcode-worker.js"
+}
+/sudo -u "\$APP_USER" node deploy\/apply-global-call-overlay-v1\.mjs/ {
+  print "sudo -u \"$APP_USER\" node deploy/apply-global-call-overlay-v3.mjs"
+  next
 }
 /sudo -u "\$APP_USER" node deploy\/apply-cparty-realtime-end-v1\.mjs/ {
   print
@@ -86,5 +86,6 @@ echo "Existing incompatible C-Party media can be normalized without re-upload."
 echo "Older Admin Desktop clients remain upload-compatible during background conversion."
 echo "C-Party custom-upload rooms can switch video during an active session."
 echo "C-Party participants force-reload the new media source in realtime and via polling fallback."
+echo "Accepted incoming calls use the persistent GlobalCallOverlay V3."
 df -h "$APP_DIR" || true
 exec bash "$TMP2"
