@@ -26,6 +26,8 @@ mkdir -p "$BACKUP_ROOT" "$BACKUP_DIR"
 
 BACKUP_FILES=(
   backend/server.js backend/server.production.js
+  backend/socialbird-final-platform.js backend/strict-privacy-gate.js backend/stable-news-time.js
+  backend/cinema-qr.js backend/cinema-stream.js backend/admin-cinema-library.js
   src/App.tsx src/components/VoiceCallControls.tsx src/components/AppSidebar.tsx
   src/components/CinemaQrScanner.tsx src/components/RealtimeNotifications.tsx
   src/lib/call-audio-reliability.ts src/lib/cinema-upload.ts
@@ -93,6 +95,10 @@ echo "[3/10] Applying final wiring"
 sudo -u "$APP_USER" node deploy/apply-global-call-overlay-v1.mjs
 sudo -u "$APP_USER" node deploy/apply-socialbird-final-runtime-v1.mjs
 sudo -u "$APP_USER" node deploy/apply-cparty-realtime-end-v1.mjs
+
+echo "  Verifying patched backend syntax before build/restart"
+node --check backend/socialbird-final-platform.js
+node --check backend/server.js
 require_text backend/server.js "SOCIALBIRD_FINAL_PLATFORM_V1: early-middleware" "privacy/news middleware"
 require_text backend/server.js "SOCIALBIRD_FINAL_PLATFORM_V1: final-routes" "final backend routes"
 require_text backend/server.js "SOCIALBIRD_ADMIN_CINEMA_V1: routes" "Admin Cinema routes wired"
@@ -116,6 +122,7 @@ echo "[5/10] Rebuilding hardened backend"
 sudo -u "$APP_USER" node deploy/harden-source.mjs
 sudo -u "$APP_USER" node deploy/enable-sandbox-compiler.mjs
 node --check backend/server.production.js
+node --check backend/socialbird-final-platform.js
 require_text backend/server.production.js "SOCIALBIRD_FINAL_PLATFORM_V1: final-routes" "final routes in production backend"
 require_text backend/server.production.js "SOCIALBIRD_ADMIN_CINEMA_V1: routes" "Admin Cinema routes in production backend"
 require_text backend/server.production.js "SOCIALBIRD_CHAT_PLATFORM_V1: resumable-upload-stickers" "Chat Platform v4 preserved"
