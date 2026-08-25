@@ -1200,6 +1200,7 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
       if (detail.action === "answer") {
         autoAnswerRef.current = true;
         pendingPushAnswerRef.current = true;
+        pendingPushAnswerRef.current = true;
         if (incomingRef.current) void acceptIncoming();
       } else if (detail.action === "decline") {
         declineIncoming();
@@ -1226,6 +1227,7 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
   useEffect(() => {
     const acceptFromNativeRuntime = () => {
       autoAnswerRef.current = true;
+      pendingPushAnswerRef.current = true;
       pendingPushAnswerRef.current = true;
       try { sessionStorage.removeItem("itbird-native-answer-call"); } catch {}
       if (incomingRef.current) void acceptIncoming();
