@@ -10,6 +10,7 @@ on:
       - "deploy/apply-android-runtime-fixes.mjs"
       - "deploy/apply-native-fcm-android.mjs"
       - "deploy/apply-android-update-awareness.mjs"
+      - "deploy/apply-cparty-android-deeplink.mjs"
       - ".github/workflows/android-apk.yml"
 
 permissions:
@@ -33,20 +34,25 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Apply native Android runtime, FCM and update integration
+      - name: Apply native Android runtime, FCM, update and C-Party deep-link integration
         run: |
           node --check deploy/apply-android-runtime-fixes.mjs
           node --check deploy/apply-native-fcm-android.mjs
           node --check deploy/apply-android-update-awareness.mjs
+          node --check deploy/apply-cparty-android-deeplink.mjs
           node deploy/apply-android-runtime-fixes.mjs
           node deploy/apply-native-fcm-android.mjs
           node deploy/apply-android-update-awareness.mjs
+          node deploy/apply-cparty-android-deeplink.mjs
           grep -q "NATIVE_ANDROID_RUNTIME: initialize-runtime" android-app/app/src/main/java/io/itbird/socialbird/MainActivity.java
           grep -q "NATIVE_ANDROID_RUNTIME: answer-intent" android-app/app/src/main/java/io/itbird/socialbird/MainActivity.java
           grep -q "NATIVE_ANDROID_RUNTIME: web-fullscreen" android-app/app/src/main/java/io/itbird/socialbird/MainActivity.java
           grep -q "NATIVE_FCM_PUSH" android-app/app/src/main/java/io/itbird/socialbird/MainActivity.java
           grep -q "ANDROID_UPDATE_AWARENESS: expose-version-code" android-app/app/src/main/java/io/itbird/socialbird/MainActivity.java
+          grep -q "CPARTY_ANDROID_DEEPLINK_V1: canonical-socialbird-origin" android-app/app/src/main/java/io/itbird/socialbird/MainActivity.java
+          grep -q 'SITE_ORIGIN = "https://socialbird.ru"' android-app/app/src/main/java/io/itbird/socialbird/MainActivity.java
           grep -q "SocialBirdFirebaseMessagingService" android-app/app/src/main/AndroidManifest.xml
+          grep -q "android.permission.CAMERA" android-app/app/src/main/AndroidManifest.xml
           grep -q "firebase-messaging" android-app/app/build.gradle
 
       - name: Require Firebase Android configuration
@@ -132,9 +138,10 @@ jobs:
         run: |
           if gh release view android-latest >/dev/null 2>&1; then
             gh release upload android-latest SocialBIRD-Android.apk SocialBIRD-Android-version.json --clobber
+            gh release edit android-latest --notes "SocialBIRD Android: production React/WebRTC, FCM push-звонки и уведомления, PiP/MediaProjection, C-Party QR/deep-link вход через socialbird.ru, камера/микрофон, файлы и проверка обновлений APK."
           else
             gh release create android-latest SocialBIRD-Android.apk SocialBIRD-Android-version.json \
               --title "SocialBIRD Android" \
-              --notes "SocialBIRD Android: тот же production React/WebRTC, FCM push-звонки и уведомления, CallStyle/full-screen incoming call UI, PiP, MediaProjection, системный звук, камера/микрофон, файлы и проверка реальных обновлений APK." \
+              --notes "SocialBIRD Android: production React/WebRTC, FCM push-звонки и уведомления, PiP/MediaProjection, C-Party QR/deep-link вход через socialbird.ru, камера/микрофон, файлы и проверка обновлений APK." \
               --prerelease
           fi
