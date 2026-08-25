@@ -42,6 +42,7 @@ import GlobalCallOverlay from './components/GlobalCallOverlay';
 import StrictUserProfileRoute from './components/StrictUserProfileRoute';
 import { CallProvider } from './components/call/CallProvider';
 import NativeCallAudioBridge from './components/call/NativeCallAudioBridge';
+import PushCallDeepLinkBridge from './components/call/PushCallDeepLinkBridge';
 import { AuthProvider } from "@/pages/AuthContext";
 import './styles/chat-platform-v1.css';
 
@@ -91,6 +92,7 @@ const AppLayout = () => {
       <SeoManager />
       <NativeAppBridge />
       <NativeCallAudioBridge />
+      <PushCallDeepLinkBridge />
       <RealtimeNotifications />
       <PushCallRegistration />
       <GlobalCallOverlay />
