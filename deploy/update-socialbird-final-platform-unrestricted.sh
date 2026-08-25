@@ -19,14 +19,16 @@ sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   deploy/apply-cinema-format-normalization-v1.mjs \
   deploy/apply-cinema-existing-normalize-v1.mjs \
   deploy/apply-cinema-upload-compat-v1.mjs \
+  deploy/apply-cparty-session-media-change-v1.mjs \
   backend/cinema-transcode-worker.js
 node --check deploy/apply-cinema-unrestricted-storage.mjs
 node --check deploy/apply-cinema-format-normalization-v1.mjs
 node --check deploy/apply-cinema-existing-normalize-v1.mjs
 node --check deploy/apply-cinema-upload-compat-v1.mjs
+node --check deploy/apply-cparty-session-media-change-v1.mjs
 node --check backend/cinema-transcode-worker.js
 
-# SOCIALBIRD_UNRESTRICTED_DEPLOY_V3
+# SOCIALBIRD_UNRESTRICTED_DEPLOY_V4
 # Remove only the artificial pre-deploy free-space gate. All normal build,
 # verification, rollback, nginx, PM2 and smoke-test checks stay enabled.
 awk '
@@ -44,7 +46,8 @@ skipping { next }
 # 3) add conversion controls for already-uploaded legacy media,
 # 4) preserve compatibility with old Admin Desktop clients,
 # 5) keep the user's unrestricted upload/storage defaults,
-# 6) syntax-check the resulting backend before later build/restart stages.
+# 6) after the realtime C-Party base patch, add in-session custom-video switching,
+# 7) syntax-check the resulting backend before later build/restart stages.
 awk '
 /^echo "\[2\/10\] Checking modules"/ {
   print "if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then"
@@ -61,6 +64,11 @@ awk '
   print "node --check backend/admin-cinema-library.js"
   print "node --check backend/cinema-transcode-worker.js"
 }
+/sudo -u "\$APP_USER" node deploy\/apply-cparty-realtime-end-v1\.mjs/ {
+  print
+  print "sudo -u \"$APP_USER\" node deploy/apply-cparty-session-media-change-v1.mjs"
+  next
+}
 { print }
 ' "$TMP" > "$TMP2"
 
@@ -72,5 +80,6 @@ echo "C-Party upload size/reserve limits disabled by default."
 echo "C-Party browser video normalization enabled (FFmpeg/FFprobe)."
 echo "Existing incompatible C-Party media can be normalized without re-upload."
 echo "Older Admin Desktop clients remain upload-compatible during background conversion."
+echo "C-Party custom-upload rooms can switch video during an active session."
 df -h "$APP_DIR" || true
 exec bash "$TMP2"
