@@ -1,0 +1,84 @@
+name: Call V8 and chat expression build
+
+on:
+  push:
+    branches:
+      - deploy/socialbird-vps-production
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: socialbird-call-v8-chat-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Apply Call V4 through V8 and chat picker
+        run: |
+          node deploy/apply-call-system-v4.mjs
+          node deploy/apply-call-system-v5.mjs
+          node deploy/apply-call-system-v5-push-state-fix.mjs
+          node deploy/apply-call-system-v6-video-track.mjs
+          node deploy/apply-call-system-v7-remote-video.mjs
+          node deploy/apply-call-system-v8-camera-transport.mjs
+          node deploy/apply-chat-expression-picker-v1.mjs
+          node --check deploy/apply-call-system-v8-camera-transport.mjs
+          node --check deploy/apply-chat-expression-picker-v1.mjs
+          node --check backend/server.js
+          grep -q 'SOCIALBIRD_CALL_SYSTEM_V8: dedicated-camera-transport' src/components/call/CallProvider.tsx
+          grep -q 'CALL_VIDEO_OFFER' src/components/call/CallProvider.tsx
+          grep -q 'CALL_VIDEO_ANSWER' src/components/call/CallProvider.tsx
+          grep -q 'CALL_VIDEO_ICE' src/components/call/CallProvider.tsx
+          grep -q 'SOCIALBIRD_CHAT_EXPRESSION_V1: portal-trigger' src/pages/Chats.tsx
+          grep -q 'SOCIALBIRD_CHAT_EXPRESSION_V1: portal-trigger' src/pages/GroupChats.tsx
+          grep -q 'data-chat-expression-picker="true"' src/components/ChatExpressionPicker.tsx
+          grep -q 'createPortal' src/components/ChatExpressionPicker.tsx
+          grep -q 'SOCIALBIRD_CHAT_EXPRESSION_V1: sticker-routes' backend/server.js
+
+      - name: Install frontend dependencies
+        run: npm ci
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: 'true'
+
+      - name: Build frontend
+        run: npm run build
+        env:
+          VITE_API_URL: https://api.socialbird.ru
+          VITE_STUN_URLS: stun:stun.l.google.com:19302
+          VITE_TURN_URLS: turn:api.socialbird.ru:3478?transport=udp,turn:api.socialbird.ru:3478?transport=tcp,turns:api.socialbird.ru:5349?transport=tcp
+          VITE_TURN_USERNAME: socialbird
+          VITE_TURN_CREDENTIAL: ci-placeholder-only
+
+      - name: Validate diff
+        run: git diff --check
+
+      - name: Commit generated V8 and chat source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            backend/server.js \
+            src/components/call/CallProvider.tsx \
+            src/pages/Chats.tsx \
+            src/pages/GroupChats.tsx \
+            src/components/ChatExpressionPicker.tsx
+          if ! git diff --cached --quiet; then
+            git commit -m "Apply generated Call V8 and chat picker fixes"
+            git push origin HEAD:${GITHUB_REF_NAME}
+          fi
