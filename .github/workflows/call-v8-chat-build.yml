@@ -46,6 +46,7 @@ jobs:
           node --check deploy/apply-call-system-v8-camera-transport.mjs
           node --check deploy/apply-chat-expression-picker-v1.mjs
           node --check backend/server.js
+          bash -n deploy/update-socialbird-v8-chat-unrestricted.sh
           grep -q 'SOCIALBIRD_CALL_SYSTEM_V5: defer-answer-until-ready' src/components/call/CallProvider.tsx
           grep -q 'SOCIALBIRD_CALL_SYSTEM_V5: real-webrtc-connected-state' src/components/call/CallProvider.tsx
           grep -q 'SOCIALBIRD_CALL_SYSTEM_V5: cold-start-user-id-defer' src/components/call/CallProvider.tsx
