@@ -19,6 +19,12 @@ FILES=(
   backend/server.production.js
   backend/stickers.js
   backend/offline-call-queue.js
+  backend/strict-privacy-gate.js
+  backend/stable-news-time.js
+  backend/socialbird-final-platform.js
+  backend/cinema-qr.js
+  backend/cinema-stream.js
+  backend/admin-cinema-library.js
   src/components/call/CallProvider.tsx
   src/components/call/NativeCallAudioBridge.tsx
   src/components/call/PushCallDeepLinkBridge.tsx
@@ -87,6 +93,9 @@ echo "Remote HEAD: $(sudo -u "$APP_USER" git rev-parse "refs/remotes/origin/$BRA
 # migration patchers over an already generated V8 CallProvider.
 sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   backend/server.js backend/stickers.js backend/offline-call-queue.js \
+  backend/strict-privacy-gate.js backend/stable-news-time.js \
+  backend/socialbird-final-platform.js backend/cinema-qr.js backend/cinema-stream.js \
+  backend/admin-cinema-library.js \
   src/components/call/CallProvider.tsx \
   src/components/call/NativeCallAudioBridge.tsx \
   src/components/call/PushCallDeepLinkBridge.tsx \
@@ -94,9 +103,16 @@ sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   src/pages/Chats.tsx src/pages/GroupChats.tsx \
   src/components/ChatExpressionPicker.tsx src/components/StickerBubble.tsx \
   src/lib/stickers.ts public/stickers \
+  deploy/apply-final-backend-wiring-v1.mjs \
   deploy/harden-source.mjs deploy/enable-sandbox-compiler.mjs
 
-echo "[2/8] Verifying Call V8 and chat picker"
+# Canonical server.js does not permanently contain the historical final-platform routes;
+# restore only the backend wiring before hardening. This keeps C-Party/Admin Cinema intact
+# without running old V5/V6/V7 call mutators over Call V8.
+node --check deploy/apply-final-backend-wiring-v1.mjs
+sudo -u "$APP_USER" node deploy/apply-final-backend-wiring-v1.mjs
+
+echo "[2/8] Verifying Call V8, chat picker and preserved platform wiring"
 node --check backend/server.js
 node --check backend/stickers.js
 node --check backend/offline-call-queue.js
@@ -171,4 +187,5 @@ trap - ERR
 echo
 echo "SocialBIRD V8 camera + chat expression fixes deployed successfully."
 echo "Included: independent WebRTC camera transport, remote camera rendering, emoji/sticker body portal, sticker sending/rendering."
+echo "Preserved: final platform routes, C-Party, Admin Cinema, FCM and compiler sandbox."
 echo "Backup: $BACKUP_DIR"
