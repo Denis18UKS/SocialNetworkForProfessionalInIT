@@ -1,4 +1,4 @@
-name: Call V7 remote video build
+name: Call video compatibility build
 
 on:
   push:
@@ -7,11 +7,11 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: socialbird-call-v7-${{ github.ref }}
+  group: socialbird-call-video-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  call-v7-build:
+  call-video-build:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -24,19 +24,32 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Apply Call V4 V5 V6 V7
+      - name: Verify current call video stack
         run: |
           node deploy/apply-call-system-v4.mjs
-          node deploy/apply-call-system-v5.mjs
-          node deploy/apply-call-system-v5-push-state-fix.mjs
-          node deploy/apply-call-system-v6-video-track.mjs
-          node deploy/apply-call-system-v7-remote-video.mjs
-          node --check deploy/apply-call-system-v7-remote-video.mjs
-          grep -q 'SOCIALBIRD_CALL_SYSTEM_V6: real-camera-sender' src/components/call/CallProvider.tsx
-          grep -q 'SOCIALBIRD_CALL_SYSTEM_V7: receiver-reconciliation' src/components/call/CallProvider.tsx
-          grep -q 'SOCIALBIRD_CALL_SYSTEM_V7: dedicated-camera-track-stream' src/components/call/CallProvider.tsx
-          grep -q 'SOCIALBIRD_CALL_SYSTEM_V7: desktop-receiver-watchdog' src/components/call/CallProvider.tsx
-          grep -q 'pc.getReceivers()' src/components/call/CallProvider.tsx
+          if grep -q 'SOCIALBIRD_CALL_SYSTEM_V8: dedicated-camera-transport' src/components/call/CallProvider.tsx; then
+            echo 'Call V8 is current; do not re-run superseded V5/V6/V7 mutators.'
+            node deploy/apply-call-system-v8-camera-transport.mjs
+          else
+            node deploy/apply-call-system-v5.mjs
+            node deploy/apply-call-system-v5-push-state-fix.mjs
+            node deploy/apply-call-system-v6-video-track.mjs
+            node deploy/apply-call-system-v7-remote-video.mjs
+          fi
+          node --check deploy/apply-call-system-v8-camera-transport.mjs
+          grep -q 'SOCIALBIRD_CALL_SYSTEM_V5: defer-answer-until-ready' src/components/call/CallProvider.tsx
+          grep -q 'SOCIALBIRD_CALL_SYSTEM_V5: real-webrtc-connected-state' src/components/call/CallProvider.tsx
+          grep -q 'setParticipantVolume' src/components/call/CallProvider.tsx
+          if grep -q 'SOCIALBIRD_CALL_SYSTEM_V8: dedicated-camera-transport' src/components/call/CallProvider.tsx; then
+            grep -q 'SOCIALBIRD_CALL_SYSTEM_V8: auxiliary-camera-sync' src/components/call/CallProvider.tsx
+            grep -q 'CALL_VIDEO_OFFER' src/components/call/CallProvider.tsx
+            grep -q 'CALL_VIDEO_ANSWER' src/components/call/CallProvider.tsx
+            grep -q 'CALL_VIDEO_ICE' src/components/call/CallProvider.tsx
+          else
+            grep -q 'SOCIALBIRD_CALL_SYSTEM_V6: real-camera-sender' src/components/call/CallProvider.tsx
+            grep -q 'SOCIALBIRD_CALL_SYSTEM_V7: receiver-reconciliation' src/components/call/CallProvider.tsx
+            grep -q 'pc.getReceivers()' src/components/call/CallProvider.tsx
+          fi
 
       - name: Install frontend dependencies
         run: npm ci
