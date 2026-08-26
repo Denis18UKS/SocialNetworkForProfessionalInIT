@@ -50,10 +50,16 @@ for (const required of [
   'cameraSender: RTCRtpSender | null',
   'bundle.pc.addTrack(track, local)',
   'CALL_CAMERA_RESYNC',
-  'remote-video-unmute-refresh',
   'restore-existing-unmuted-camera',
 ]) {
   if (!source.includes(required)) throw new Error(`Call V6 invariant missing: ${required}`);
+}
+
+// V7 deliberately replaces the V6 ontrack refresh implementation. Accept either the
+// original V6 marker or the newer V7 receiver-stream implementation on repeated deploys.
+if (!source.includes('SOCIALBIRD_CALL_SYSTEM_V6: remote-video-unmute-refresh')
+    && !source.includes('SOCIALBIRD_CALL_SYSTEM_V7: dedicated-camera-track-stream')) {
+  throw new Error('Call V6/V7 remote video invariant missing');
 }
 
 console.log('Call System V6 video receiving is current: real camera senders, addTrack renegotiation, unmute refresh and camera resync.');
