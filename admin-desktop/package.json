@@ -1,6 +1,6 @@
 {
   "name": "socialbird-admin-desktop",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "description": "Secure SocialBIRD administrator desktop application with C-Party library management",
   "main": "main.cjs",
