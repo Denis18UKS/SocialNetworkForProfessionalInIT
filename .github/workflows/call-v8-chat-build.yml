@@ -29,22 +29,33 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Apply Call V4 through V8 and chat picker
+      - name: Apply or verify Call V8 and chat picker
         run: |
           node deploy/apply-call-system-v4.mjs
-          node deploy/apply-call-system-v5.mjs
-          node deploy/apply-call-system-v5-push-state-fix.mjs
-          node deploy/apply-call-system-v6-video-track.mjs
-          node deploy/apply-call-system-v7-remote-video.mjs
-          node deploy/apply-call-system-v8-camera-transport.mjs
+          if grep -q 'SOCIALBIRD_CALL_SYSTEM_V8: dedicated-camera-transport' src/components/call/CallProvider.tsx; then
+            echo 'Generated Call V8 already present; preserving newer camera transport instead of re-running superseded V5/V6/V7 mutators.'
+            node deploy/apply-call-system-v8-camera-transport.mjs
+          else
+            node deploy/apply-call-system-v5.mjs
+            node deploy/apply-call-system-v5-push-state-fix.mjs
+            node deploy/apply-call-system-v6-video-track.mjs
+            node deploy/apply-call-system-v7-remote-video.mjs
+            node deploy/apply-call-system-v8-camera-transport.mjs
+          fi
           node deploy/apply-chat-expression-picker-v1.mjs
           node --check deploy/apply-call-system-v8-camera-transport.mjs
           node --check deploy/apply-chat-expression-picker-v1.mjs
           node --check backend/server.js
+          grep -q 'SOCIALBIRD_CALL_SYSTEM_V5: defer-answer-until-ready' src/components/call/CallProvider.tsx
+          grep -q 'SOCIALBIRD_CALL_SYSTEM_V5: real-webrtc-connected-state' src/components/call/CallProvider.tsx
+          grep -q 'SOCIALBIRD_CALL_SYSTEM_V5: cold-start-user-id-defer' src/components/call/CallProvider.tsx
           grep -q 'SOCIALBIRD_CALL_SYSTEM_V8: dedicated-camera-transport' src/components/call/CallProvider.tsx
+          grep -q 'SOCIALBIRD_CALL_SYSTEM_V8: auxiliary-camera-sync' src/components/call/CallProvider.tsx
           grep -q 'CALL_VIDEO_OFFER' src/components/call/CallProvider.tsx
           grep -q 'CALL_VIDEO_ANSWER' src/components/call/CallProvider.tsx
           grep -q 'CALL_VIDEO_ICE' src/components/call/CallProvider.tsx
+          grep -q 'CALL_VIDEO_STOP' src/components/call/CallProvider.tsx
+          grep -q 'setParticipantVolume' src/components/call/CallProvider.tsx
           grep -q 'SOCIALBIRD_CHAT_EXPRESSION_V1: portal-trigger' src/pages/Chats.tsx
           grep -q 'SOCIALBIRD_CHAT_EXPRESSION_V1: portal-trigger' src/pages/GroupChats.tsx
           grep -q 'data-chat-expression-picker="true"' src/components/ChatExpressionPicker.tsx
@@ -74,10 +85,13 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add \
             backend/server.js \
+            backend/stickers.js \
             src/components/call/CallProvider.tsx \
             src/pages/Chats.tsx \
             src/pages/GroupChats.tsx \
-            src/components/ChatExpressionPicker.tsx
+            src/components/ChatExpressionPicker.tsx \
+            src/components/StickerBubble.tsx \
+            src/lib/stickers.ts
           if ! git diff --cached --quiet; then
             git commit -m "Apply generated Call V8 and chat picker fixes"
             git push origin HEAD:${GITHUB_REF_NAME}
