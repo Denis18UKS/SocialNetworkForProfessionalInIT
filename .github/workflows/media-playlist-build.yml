@@ -1,0 +1,77 @@
+name: Chat multi-upload and C-Party playlist build
+
+on:
+  push:
+    branches:
+      - deploy/socialbird-vps-production
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: socialbird-media-playlist-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Apply chat upload and playlist features
+        run: |
+          node deploy/apply-chat-media-mobile-fix.mjs
+          node deploy/apply-chat-media-backend-fix.mjs
+          node deploy/apply-chat-multi-upload-unlimited-video-v1.mjs
+          node deploy/apply-cinema-unrestricted-storage.mjs
+          node deploy/apply-cparty-playlist-v1.mjs
+
+      - name: Validate generated source
+        run: |
+          node --check deploy/apply-chat-multi-upload-unlimited-video-v1.mjs
+          node --check deploy/apply-cparty-playlist-v1.mjs
+          node --check backend/server.js
+          node --check backend/socialbird-final-platform.js
+          grep -q 'SOCIALBIRD_CHAT_MULTI_UPLOAD_V1: personal' src/pages/Chats.tsx
+          grep -q 'SOCIALBIRD_CHAT_MULTI_UPLOAD_V1: group' src/pages/GroupChats.tsx
+          grep -q 'multiple' src/pages/Chats.tsx
+          grep -q 'multiple' src/pages/GroupChats.tsx
+          grep -q 'CHAT_UPLOAD_PARALLELISM = 3' src/pages/Chats.tsx
+          grep -q 'CHAT_UPLOAD_PARALLELISM = 3' src/pages/GroupChats.tsx
+          grep -q 'SOCIALBIRD_CHAT_MULTI_UPLOAD_V1: unlimited-video-backend' backend/server.js
+          grep -q "chatUpload.single('media')" backend/server.js
+          grep -q 'client_max_body_size 0;' deploy/nginx-socialbird.conf.template
+          grep -q 'CPARTY_UNRESTRICTED_STORAGE_V1' backend/socialbird-final-platform.js
+          grep -q 'SOCIALBIRD_CPARTY_PLAYLIST_V1: persistent-queue' backend/socialbird-final-platform.js
+          grep -q '/cinema/rooms/:id/playlist/next' backend/socialbird-final-platform.js
+          grep -q 'SOCIALBIRD_CPARTY_PLAYLIST_V1: room-player' src/pages/CinemaPartyRoom.tsx
+          grep -q 'CinemaPlaylistPanel' src/pages/CinemaPartyRoom.tsx
+          grep -q 'handlePlaylistEnded' src/pages/CinemaPartyRoom.tsx
+          grep -q 'Выбрать одно или несколько видео' src/components/CinemaPlaylistPanel.tsx
+          git diff --check
+
+      - name: Install frontend dependencies
+        run: npm ci
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: 'true'
+
+      - name: Build frontend
+        run: npm run build
+        env:
+          VITE_API_URL: https://api.socialbird.ru
+          VITE_STUN_URLS: stun:stun.l.google.com:19302
+          VITE_TURN_URLS: turn:api.socialbird.ru:3478?transport=udp,turn:api.socialbird.ru:3478?transport=tcp,turns:api.socialbird.ru:5349?transport=tcp
+          VITE_TURN_USERNAME: socialbird
+          VITE_TURN_CREDENTIAL: ci-placeholder-only
+
+      - name: Final diff validation
+        run: git diff --check
