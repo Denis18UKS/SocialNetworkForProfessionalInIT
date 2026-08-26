@@ -18,6 +18,7 @@ const crypto = require('crypto');
 const { runSandboxedCompilerJob } = require('./compiler-client');
 const { registerOfflineCallQueue } = require('./offline-call-queue');
 const { registerPasswordRecoveryRoutes } = require('./password-recovery');
+const { registerStickers } = require('./stickers');
 
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
@@ -4025,6 +4026,17 @@ nativeFcmPush = registerNativeFcmPush({ app, db, verifyToken });
 
 // SOCIALBIRD_CALL_SYSTEM_V4: register-offline-call-queue
 ({ queueOfflineCallSignal, deliverPendingCallSignals } = registerOfflineCallQueue({ db, isUserOnline }));
+
+// SOCIALBIRD_CHAT_EXPRESSION_V1: sticker-routes
+registerStickers({
+    app,
+    db,
+    verifyToken,
+    notifyClients,
+    getChatParticipants,
+    hasUserBlockBetween,
+    resolveGroupMentionRecipients,
+});
 
 // Старт сервера
 // PRODUCTION_HARDENING: configurable-listen-address

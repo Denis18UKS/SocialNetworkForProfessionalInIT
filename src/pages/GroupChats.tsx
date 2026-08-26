@@ -48,9 +48,11 @@ import { createReconnectingWebSocket } from "@/lib/reconnecting-websocket";
 import { readOnlineUserIds, subscribeOnlineUserIds, writeOnlineUserIds } from "@/lib/realtime";
 import VoiceCallControls from "@/components/VoiceCallControls";
 import VoiceMessageBubble from "@/components/VoiceMessageBubble";
+import ChatExpressionPicker from "@/components/ChatExpressionPicker";
+import StickerBubble from "@/components/StickerBubble";
+import { sendSticker } from "@/lib/stickers";
 
-import { Smile, Mic } from 'lucide-react';
-import EmojiPicker, { EmojiClickData } from 'emoji-picker-react';
+import { Mic } from 'lucide-react';
 
 interface User {
     id: number;
@@ -88,6 +90,7 @@ interface GroupMessage {
     is_deleted?: boolean | number;
     is_pinned?: boolean | number;
     self_pinned?: boolean | number;
+    sticker_id?: number | null;
 }
 
 interface DecodedToken {
@@ -170,8 +173,6 @@ const GroupChats = () => {
     const messagesEndRef = useRef<HTMLDivElement | null>(null);
     const messagesContainerRef = useRef<HTMLDivElement | null>(null);
     const messageRefs = useRef<Record<number, HTMLDivElement | null>>({});
-
-    const [showEmojiPicker, setShowEmojiPicker] = useState(false);
     const [isRecording, setIsRecording] = useState(false);
     const mediaRecorder = useRef<MediaRecorder | null>(null);
     const audioChunks = useRef<Blob[]>([]);
@@ -249,9 +250,9 @@ const GroupChats = () => {
         return isAudio && (fileName.includes("voice") || fileName.includes("голос") || fileName === "voice-message.wav");
     };
 
-    const handleEmojiClick = (emojiData: EmojiClickData) => {
-        setNewMessage(prev => prev + emojiData.emoji);
-        setShowEmojiPicker(false);
+    // SOCIALBIRD_CHAT_EXPRESSION_V1: portal-expression-handler
+    const handleEmojiClick = (emoji: string) => {
+        setNewMessage(prev => prev + emoji);
     };
 
     const startRecording = async () => {
@@ -890,6 +891,23 @@ const GroupChats = () => {
         void sendMediaMessage(file, voiceTranscriptRef.current);
     };
 
+    // SOCIALBIRD_CHAT_EXPRESSION_V1: sticker-send
+    const handleSendSticker = async (stickerId: number) => {
+        if (!selectedChat && !chatId) {
+            toast.error('Чат не выбран');
+            return;
+        }
+        const targetChatId = Number(selectedChat?.id || chatId);
+        if (!targetChatId) return;
+        try {
+            const sentMessage = await sendSticker('group', targetChatId, stickerId);
+            setMessages((current) => [...current, sentMessage]);
+            window.setTimeout(scrollToBottom, 100);
+        } catch (error) {
+            toast.error(error instanceof Error ? error.message : 'Не удалось отправить стикер');
+        }
+    };
+
     const sendMessage = async () => {
         if (newMessage.trim() === '' && !mediaFile) return;
 
@@ -1195,7 +1213,8 @@ const GroupChats = () => {
                                                 )}
 
                                                 <>
-                                                    {msg.message && (!isVoiceMessage(msg) || revealedVoiceTextIds[msg.id]) && (
+                                                    {msg.sticker_id ? <StickerBubble stickerId={Number(msg.sticker_id)} /> : null}
+                                                {msg.message && (!isVoiceMessage(msg) || revealedVoiceTextIds[msg.id]) && (
                                                         <div className="space-y-1 text-sm">
                                                             <div>{translatedMessages[msg.id] || msg.message}</div>
                                                             {messageTranscriptions[msg.id] && (
@@ -1383,13 +1402,11 @@ const GroupChats = () => {
                                 <div className="mx-auto w-full min-w-0 max-w-3xl overflow-hidden">
                                     <div className="flex min-w-0 items-end gap-1.5 sm:gap-2">
                                         <div className="flex items-center gap-1 relative">
-                                            {/* Кнопка эмодзи */}
-                                            <button
-                                                onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-                                                className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700"
-                                            >
-                                                <Smile className="w-5 h-5 text-gray-500" />
-                                            </button>
+                                            {/* SOCIALBIRD_CHAT_EXPRESSION_V1: portal-trigger */}
+                                            <ChatExpressionPicker
+                                                onEmojiSelect={handleEmojiClick}
+                                                onStickerSelect={handleSendSticker}
+                                            />
 
                                             {/* Кнопка записи аудио */}
                                             <div className="relative">
@@ -1422,20 +1439,6 @@ const GroupChats = () => {
                                                 <div className="flex items-center gap-2 ml-2 text-red-600 dark:text-red-400">
                                                     <span className="text-sm">{formatDuration(recordingTime)}</span>
                                                     <div className="w-2 h-2 bg-red-600 rounded-full animate-pulse" />
-                                                </div>
-                                            )}
-
-                                            {/* Эмодзи-пикер */}
-                                            {showEmojiPicker && (
-                                                <div className="absolute bottom-14 left-2 z-50">
-                                                    <EmojiPicker
-                                                        onEmojiClick={handleEmojiClick}
-                                                        previewConfig={{ showPreview: false }}
-                                                        skinTonesDisabled
-                                                        searchDisabled
-                                                        width={300}
-                                                        height={350}
-                                                    />
                                                 </div>
                                             )}
                                         </div>

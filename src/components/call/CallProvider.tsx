@@ -83,6 +83,7 @@ type CallSignal = {
   participants?: CallParticipant[];
   description?: RTCSessionDescriptionInit;
   candidate?: RTCIceCandidateInit;
+  transportId?: string;
   endForAll?: boolean;
   participantLeft?: boolean;
   screenStreamId?: string;
@@ -102,10 +103,17 @@ type StartCallInput = {
 type PeerBundle = {
   peerId: number;
   pc: RTCPeerConnection;
-  cameraSender: RTCRtpSender;
+  cameraSender: RTCRtpSender | null;
   screenSender: RTCRtpSender | null;
   screenAudioSenders: RTCRtpSender[];
   watchdogStop: () => void;
+};
+
+type CameraAuxTransport = {
+  peerId: number;
+  transportId: string;
+  pc: RTCPeerConnection;
+  sender: RTCRtpSender | null;
 };
 
 type AudioBinding = ReturnType<typeof attachPersistentAudioTrack>;
@@ -219,6 +227,14 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
   const audioBindingsRef = useRef<Record<string, AudioBinding>>({});
   const participantVolumesRef = useRef<Record<number, number>>({});
   const cameraResyncTimersRef = useRef<Record<number, number>>({});
+  // SOCIALBIRD_CALL_SYSTEM_V7: receiver-reconciliation
+  const remoteCameraExpectedRef = useRef<Record<number, boolean>>({});
+  const remoteVideoTrackStreamsRef = useRef<Record<string, MediaStream>>({});
+  const remoteVideoResyncAtRef = useRef<Record<number, number>>({});
+  // SOCIALBIRD_CALL_SYSTEM_V8: dedicated-camera-transport
+  const cameraAuxOutgoingRef = useRef<Record<number, CameraAuxTransport>>({});
+  const cameraAuxIncomingRef = useRef<Record<string, CameraAuxTransport>>({});
+  const cameraAuxPendingIceRef = useRef<Record<string, RTCIceCandidateInit[]>>({});
   const speakingStopsRef = useRef<Record<string, () => void>>({});
   const audioRootRef = useRef<HTMLDivElement | null>(null);
   const autoAnswerRef = useRef(false);
@@ -355,10 +371,18 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
       try { bundle.pc.close(); } catch {}
     });
     peersRef.current = {};
+    Object.values(cameraAuxOutgoingRef.current).forEach((transport) => { try { transport.pc.close(); } catch {} });
+    Object.values(cameraAuxIncomingRef.current).forEach((transport) => { try { transport.pc.close(); } catch {} });
+    cameraAuxOutgoingRef.current = {};
+    cameraAuxIncomingRef.current = {};
+    cameraAuxPendingIceRef.current = {};
     pendingOffersRef.current = {};
     pendingIceRef.current = {};
     expectedScreenStreamRef.current = {};
     remoteStreamByIdRef.current = {};
+    remoteCameraExpectedRef.current = {};
+    remoteVideoTrackStreamsRef.current = {};
+    remoteVideoResyncAtRef.current = {};
     Object.values(audioBindingsRef.current).forEach((binding) => binding.dispose());
     audioBindingsRef.current = {};
     Object.values(speakingStopsRef.current).forEach((stop) => stop());
@@ -439,6 +463,60 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
     });
   }, []);
 
+  const reconcileRemoteVideo = useCallback((peerId: number, pc: RTCPeerConnection) => {
+    if (!Number.isFinite(peerId) || peerId <= 0 || pc.signalingState === "closed") return;
+
+    const expectedScreen = expectedScreenStreamRef.current[peerId];
+    const cameraExpected = remoteCameraExpectedRef.current[peerId];
+    const receivers = pc.getReceivers().filter((receiver) =>
+      receiver.track?.kind === "video" && receiver.track.readyState === "live",
+    );
+
+    let cameraStream: MediaStream | undefined;
+    let screenStream: MediaStream | undefined;
+
+    for (const receiver of receivers) {
+      const track = receiver.track;
+      if (!track) continue;
+      const originalStream = Object.values(remoteStreamByIdRef.current).find((entry) =>
+        entry.peerId === peerId && entry.stream.getVideoTracks().some((candidate) => candidate.id === track.id),
+      )?.stream;
+
+      if (expectedScreen && originalStream?.id === expectedScreen) {
+        screenStream = originalStream;
+        continue;
+      }
+
+      if (cameraExpected === false || cameraStream) continue;
+      const key = "peer:" + peerId + ":" + track.id;
+      let dedicated = remoteVideoTrackStreamsRef.current[key];
+      if (!dedicated) {
+        dedicated = new MediaStream([track]);
+        remoteVideoTrackStreamsRef.current[key] = dedicated;
+      } else if (!dedicated.getTracks().some((candidate) => candidate.id === track.id)) {
+        dedicated.addTrack(track);
+      }
+      cameraStream = dedicated;
+    }
+
+    if (expectedScreen && !screenStream) {
+      const known = remoteStreamByIdRef.current[expectedScreen];
+      if (known?.peerId === peerId && known.stream.getVideoTracks().some((track) => track.readyState === "live")) {
+        screenStream = known.stream;
+      }
+    }
+
+    setRemoteMedia((current) => {
+      const previous = current[peerId] || {};
+      const next = { ...previous };
+      if (cameraStream) next.camera = cameraStream;
+      else if (cameraExpected === false) delete next.camera;
+      if (screenStream) next.screen = screenStream;
+      if (previous.camera === next.camera && previous.screen === next.screen) return current;
+      return { ...current, [peerId]: next };
+    });
+  }, []);
+
   const removePeer = useCallback((peerId: number) => {
     const bundle = peersRef.current[peerId];
     if (bundle) {
@@ -461,6 +539,11 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
     delete pendingOffersRef.current[peerId];
     delete pendingIceRef.current[peerId];
     delete expectedScreenStreamRef.current[peerId];
+    delete remoteCameraExpectedRef.current[peerId];
+    delete remoteVideoResyncAtRef.current[peerId];
+    Object.keys(remoteVideoTrackStreamsRef.current)
+      .filter((key) => key.startsWith("peer:" + peerId + ":"))
+      .forEach((key) => { delete remoteVideoTrackStreamsRef.current[key]; });
     // SOCIALBIRD_CALL_SYSTEM_V5: peer-camera-timer-cleanup
     if (cameraResyncTimersRef.current[peerId]) window.clearTimeout(cameraResyncTimersRef.current[peerId]);
     delete cameraResyncTimersRef.current[peerId];
@@ -482,15 +565,17 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
     const local = localStreamRef.current;
     local?.getAudioTracks().forEach((track) => pc.addTrack(track, local));
 
+    // SOCIALBIRD_CALL_SYSTEM_V6: real-camera-sender
+    // Do not pre-create an empty video transceiver for voice calls. Some browsers/WebViews
+    // keep that receiver muted forever after replaceTrack(). A real addTrack() guarantees
+    // a negotiated video m-line and a fresh remote ontrack event when video is enabled.
     const cameraTrack = local?.getVideoTracks().find((track) => track.readyState === "live");
-    const cameraTransceiver = cameraTrack
-      ? pc.addTransceiver(cameraTrack, { direction: "sendrecv", streams: local ? [local] : [] })
-      : pc.addTransceiver("video", { direction: "sendrecv" });
+    const cameraSender = cameraTrack && local ? pc.addTrack(cameraTrack, local) : null;
 
     const bundle: PeerBundle = {
       peerId,
       pc,
-      cameraSender: cameraTransceiver.sender,
+      cameraSender,
       screenSender: null,
       screenAudioSenders: [],
       watchdogStop: () => undefined,
@@ -509,7 +594,29 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
     pc.ontrack = (event) => {
       const stream = event.streams[0] || new MediaStream([event.track]);
       if (event.track.kind === "audio") attachRemoteAudio(peerId, stream, event.track);
-      if (event.track.kind === "video") classifyRemoteVideo(peerId, stream);
+      if (event.track.kind === "video") {
+        // SOCIALBIRD_CALL_SYSTEM_V7: dedicated-camera-track-stream
+        // Keep the original WebRTC stream id for screen-share classification, but bind
+        // webcam rendering to a dedicated MediaStream containing the actual receiver track.
+        remoteStreamByIdRef.current[stream.id] = { peerId, stream };
+        const expectedScreen = expectedScreenStreamRef.current[peerId];
+        if (expectedScreen && stream.id === expectedScreen) {
+          classifyRemoteVideo(peerId, stream);
+        } else {
+          const key = "peer:" + peerId + ":" + event.track.id;
+          const cameraStream = remoteVideoTrackStreamsRef.current[key] || new MediaStream([event.track]);
+          remoteVideoTrackStreamsRef.current[key] = cameraStream;
+          setRemoteMedia((current) => {
+            const previous = current[peerId] || {};
+            return previous.camera === cameraStream
+              ? current
+              : { ...current, [peerId]: { ...previous, camera: cameraStream } };
+          });
+        }
+        const refreshVideo = () => reconcileRemoteVideo(peerId, pc);
+        event.track.addEventListener("unmute", refreshVideo);
+        window.setTimeout(refreshVideo, 0);
+      }
       event.track.addEventListener("ended", () => {
         if (event.track.kind === "video") {
           setRemoteMedia((current) => {
@@ -533,6 +640,7 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
     // SOCIALBIRD_CALL_SYSTEM_V5: real-webrtc-connected-state
     const markRealConnection = () => {
       if (pc.connectionState !== "connected") return;
+      reconcileRemoteVideo(peerId, pc);
       if (acceptedConnectTimerRef.current !== null) {
         window.clearTimeout(acceptedConnectTimerRef.current);
         acceptedConnectTimerRef.current = null;
@@ -549,7 +657,7 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
 
     peersRef.current[peerId] = bundle;
     return bundle;
-  }, [attachRemoteAudio, classifyRemoteVideo, sendSignal]);
+  }, [attachRemoteAudio, classifyRemoteVideo, reconcileRemoteVideo, sendSignal]);
 
   const makeOffer = useCallback(async (peerId: number, iceRestart = false) => {
     const active = callRef.current;
@@ -586,22 +694,26 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
       try { await pc.setLocalDescription({ type: "rollback" }); } catch {}
     }
     await pc.setRemoteDescription(new RTCSessionDescription(signal.description));
+    reconcileRemoteVideo(Number(signal.senderId), pc);
+    window.setTimeout(() => reconcileRemoteVideo(Number(signal.senderId), pc), 150);
     await flushPendingIce(Number(signal.senderId), pc);
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     const active = callRef.current;
     if (!active) return;
     sendSignal("CALL_ANSWER", [Number(signal.senderId)], { ...active, description: answer });
-  }, [createPeer, flushPendingIce, sendSignal]);
+  }, [createPeer, flushPendingIce, reconcileRemoteVideo, sendSignal]);
 
   const handleAnswer = useCallback(async (signal: CallSignal) => {
     if (!signal.description || !signal.senderId) return;
     const bundle = peersRef.current[Number(signal.senderId)];
     if (!bundle || bundle.pc.signalingState === "closed") return;
     await bundle.pc.setRemoteDescription(new RTCSessionDescription(signal.description)).catch(() => undefined);
+    reconcileRemoteVideo(Number(signal.senderId), bundle.pc);
+    window.setTimeout(() => reconcileRemoteVideo(Number(signal.senderId), bundle.pc), 150);
     await flushPendingIce(Number(signal.senderId), bundle.pc);
     // V5: SDP answer alone is not a connected call. connectionstatechange owns phase=active.
-  }, [flushPendingIce]);
+  }, [flushPendingIce, reconcileRemoteVideo]);
 
   const ensureLocalMedia = useCallback(async (kind: CallKind, facing: CameraFacingMode = "user") => {
     const existing = localStreamRef.current;
@@ -617,6 +729,174 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
     if (selfId && audioTrack) monitorAudioTrack(`local:${selfId}:${audioTrack.id}`, selfId, audioTrack);
     return stream;
   }, [monitorAudioTrack]);
+
+  const closeOutgoingCameraTransport = useCallback((peerId: number, snapshot?: CallSnapshot | null, broadcast = false) => {
+    const current = cameraAuxOutgoingRef.current[peerId];
+    if (current) {
+      try { current.pc.close(); } catch {}
+      delete cameraAuxOutgoingRef.current[peerId];
+    }
+    if (broadcast && snapshot) {
+      sendSignal("CALL_VIDEO_STOP", [peerId], { ...snapshot, transportId: current?.transportId });
+    }
+  }, [sendSignal]);
+
+  const startOutgoingCameraTransport = useCallback(async (snapshot: CallSnapshot, peerId: number, track: MediaStreamTrack) => {
+    if (!Number.isFinite(peerId) || peerId <= 0 || track.readyState !== "live") return;
+    const existing = cameraAuxOutgoingRef.current[peerId];
+    if (existing && existing.pc.signalingState !== "closed") {
+      if (existing.sender) await existing.sender.replaceTrack(track).catch(() => undefined);
+      return;
+    }
+
+    const selfId = currentUserIdRef.current;
+    if (!selfId) return;
+    const transportId = snapshot.callId + ":camera:" + selfId + ":" + peerId + ":" + Date.now() + ":" + Math.random().toString(36).slice(2, 8);
+    const pc = new RTCPeerConnection(getPeerConnectionConfig());
+    const cameraStream = new MediaStream([track]);
+    const sender = pc.addTrack(track, cameraStream);
+    const transport: CameraAuxTransport = { peerId, transportId, pc, sender };
+    cameraAuxOutgoingRef.current[peerId] = transport;
+
+    pc.onicecandidate = (event) => {
+      if (!event.candidate || cameraAuxOutgoingRef.current[peerId]?.transportId !== transportId) return;
+      sendSignal("CALL_VIDEO_ICE", [peerId], {
+        ...snapshot,
+        transportId,
+        candidate: event.candidate.toJSON(),
+      });
+    };
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    sendSignal("CALL_VIDEO_OFFER", [peerId], {
+      ...snapshot,
+      transportId,
+      cameraEnabled: true,
+      description: offer,
+    });
+  }, [sendSignal]);
+
+  const syncOutgoingCameraTransports = useCallback(async (snapshot: CallSnapshot, track: MediaStreamTrack | null) => {
+    const peerIds = allOtherParticipantIds(snapshot);
+    if (!track) {
+      const existingPeerIds = Object.keys(cameraAuxOutgoingRef.current).map(Number);
+      existingPeerIds.forEach((peerId) => closeOutgoingCameraTransport(peerId, snapshot, true));
+      return;
+    }
+    for (const peerId of peerIds) {
+      await startOutgoingCameraTransport(snapshot, peerId, track);
+    }
+  }, [allOtherParticipantIds, closeOutgoingCameraTransport, startOutgoingCameraTransport]);
+
+  const flushAuxCameraIce = useCallback(async (transportId: string, pc: RTCPeerConnection) => {
+    const candidates = cameraAuxPendingIceRef.current[transportId] || [];
+    delete cameraAuxPendingIceRef.current[transportId];
+    for (const candidate of candidates) {
+      await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => undefined);
+    }
+  }, []);
+
+  const handleAuxCameraSignal = useCallback(async (type: string, signal: CallSignal) => {
+    const peerId = Number(signal.senderId);
+    const transportId = String(signal.transportId || "");
+    if (!peerId || !transportId) return;
+
+    if (type === "CALL_VIDEO_OFFER") {
+      if (!signal.description) return;
+      const previous = cameraAuxIncomingRef.current[transportId];
+      if (previous) { try { previous.pc.close(); } catch {} }
+
+      const pc = new RTCPeerConnection(getPeerConnectionConfig());
+      const transport: CameraAuxTransport = { peerId, transportId, pc, sender: null };
+      cameraAuxIncomingRef.current[transportId] = transport;
+
+      pc.onicecandidate = (event) => {
+        if (!event.candidate || cameraAuxIncomingRef.current[transportId]?.pc !== pc) return;
+        const active = callRef.current;
+        if (!active) return;
+        sendSignal("CALL_VIDEO_ICE", [peerId], {
+          ...active,
+          transportId,
+          candidate: event.candidate.toJSON(),
+        });
+      };
+      pc.ontrack = (event) => {
+        if (event.track.kind !== "video") return;
+        const cameraStream = new MediaStream([event.track]);
+        remoteCameraExpectedRef.current[peerId] = true;
+        setRemoteMedia((current) => {
+          const previousMedia = current[peerId] || {};
+          return { ...current, [peerId]: { ...previousMedia, camera: cameraStream } };
+        });
+        const restore = () => {
+          if (event.track.readyState !== "live") return;
+          setRemoteMedia((current) => {
+            const previousMedia = current[peerId] || {};
+            return { ...current, [peerId]: { ...previousMedia, camera: cameraStream } };
+          });
+        };
+        event.track.addEventListener("unmute", restore);
+        event.track.addEventListener("ended", () => {
+          setRemoteMedia((current) => {
+            const previousMedia = current[peerId];
+            if (!previousMedia?.camera?.getTracks().some((item) => item.id === event.track.id)) return current;
+            const next = { ...previousMedia };
+            delete next.camera;
+            return { ...current, [peerId]: next };
+          });
+        }, { once: true });
+      };
+
+      await pc.setRemoteDescription(new RTCSessionDescription(signal.description));
+      await flushAuxCameraIce(transportId, pc);
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      const active = callRef.current;
+      if (!active) return;
+      sendSignal("CALL_VIDEO_ANSWER", [peerId], { ...active, transportId, description: answer });
+      return;
+    }
+
+    if (type === "CALL_VIDEO_ANSWER") {
+      if (!signal.description) return;
+      const outgoing = Object.values(cameraAuxOutgoingRef.current).find((item) => item.transportId === transportId);
+      if (!outgoing || outgoing.pc.signalingState === "closed") return;
+      await outgoing.pc.setRemoteDescription(new RTCSessionDescription(signal.description)).catch(() => undefined);
+      await flushAuxCameraIce(transportId, outgoing.pc);
+      return;
+    }
+
+    if (type === "CALL_VIDEO_ICE") {
+      if (!signal.candidate) return;
+      const outgoing = Object.values(cameraAuxOutgoingRef.current).find((item) => item.transportId === transportId);
+      const incoming = cameraAuxIncomingRef.current[transportId];
+      const pc = outgoing?.pc || incoming?.pc;
+      if (pc?.remoteDescription) {
+        await pc.addIceCandidate(new RTCIceCandidate(signal.candidate)).catch(() => undefined);
+      } else {
+        cameraAuxPendingIceRef.current[transportId] ||= [];
+        cameraAuxPendingIceRef.current[transportId].push(signal.candidate);
+      }
+      return;
+    }
+
+    if (type === "CALL_VIDEO_STOP") {
+      Object.entries(cameraAuxIncomingRef.current).forEach(([id, transport]) => {
+        if (transport.peerId !== peerId) return;
+        try { transport.pc.close(); } catch {}
+        delete cameraAuxIncomingRef.current[id];
+      });
+      remoteCameraExpectedRef.current[peerId] = false;
+      setRemoteMedia((current) => {
+        const previousMedia = current[peerId];
+        if (!previousMedia) return current;
+        const next = { ...previousMedia };
+        delete next.camera;
+        return { ...current, [peerId]: next };
+      });
+    }
+  }, [flushAuxCameraIce, sendSignal]);
 
   const startCall = useCallback(async (input: StartCallInput) => {
     if (startingRef.current) return;
@@ -755,6 +1035,8 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
       }
 
       sendSignal("CALL_ACCEPT", targetIds, snapshot);
+      const acceptedCameraTrack = stream.getVideoTracks().find((item) => item.readyState === "live") || null;
+      if (acceptedCameraTrack) await syncOutgoingCameraTransports(snapshot, acceptedCameraTrack);
       // Push-answer may arrive after the original offer expired. Ask the initiator
       // for a fresh negotiation by also creating an offer when this side wins the tie.
       for (const peerId of targetIds) {
@@ -766,7 +1048,7 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
     } finally {
       acceptingRef.current = false;
     }
-  }, [ensureLocalMedia, finishCallLocally, handleOffer, makeOffer, publishActive, sendSignal, stopRingtone]);
+  }, [ensureLocalMedia, finishCallLocally, handleOffer, makeOffer, publishActive, sendSignal, stopRingtone, syncOutgoingCameraTransports]);
 
   const declineIncoming = useCallback(() => {
     const invite = incomingRef.current;
@@ -840,20 +1122,39 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   const renegotiateCamera = useCallback(async (snapshot: CallSnapshot, track: MediaStreamTrack | null) => {
-    // SOCIALBIRD_CALL_SYSTEM_V5: camera-renegotiation
+    // SOCIALBIRD_CALL_SYSTEM_V8: auxiliary-camera-sync
+    await syncOutgoingCameraTransports(snapshot, track);
+    // SOCIALBIRD_CALL_SYSTEM_V6: add-remove-camera-track
     const local = localStreamRef.current;
     const peerIds = Object.keys(peersRef.current).map(Number);
     for (const peerId of peerIds) {
       const bundle = peersRef.current[peerId];
       if (!bundle || bundle.pc.signalingState === "closed") continue;
-      try {
-        if (typeof bundle.cameraSender.setStreams === "function") bundle.cameraSender.setStreams(...(local ? [local] : []));
-      } catch {}
-      await bundle.cameraSender.replaceTrack(track).catch(() => undefined);
+
+      if (track && local) {
+        if (!bundle.cameraSender) {
+          bundle.cameraSender = bundle.pc.addTrack(track, local);
+        } else {
+          try {
+            if (typeof bundle.cameraSender.setStreams === "function") bundle.cameraSender.setStreams(local);
+          } catch {}
+          await bundle.cameraSender.replaceTrack(track).catch(() => undefined);
+        }
+      } else if (bundle.cameraSender) {
+        try { bundle.pc.removeTrack(bundle.cameraSender); } catch {
+          await bundle.cameraSender.replaceTrack(null).catch(() => undefined);
+        }
+        bundle.cameraSender = null;
+      }
     }
-    sendSignal("CALL_CAMERA_STATE", allOtherParticipantIds(snapshot), { ...snapshot, cameraEnabled: Boolean(track) });
+
+    sendSignal("CALL_CAMERA_STATE", allOtherParticipantIds(snapshot), {
+      ...snapshot,
+      cameraEnabled: Boolean(track),
+      cameraFacing: snapshot.cameraFacing,
+    });
     for (const peerId of peerIds) await makeOffer(peerId, true);
-  }, [allOtherParticipantIds, makeOffer, sendSignal]);
+  }, [allOtherParticipantIds, makeOffer, sendSignal, syncOutgoingCameraTransports]);
 
   const toggleCamera = useCallback(async () => {
     const active = callRef.current;
@@ -1006,6 +1307,13 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
     if (!selfId || Number(signal.senderId) === selfId) return;
     if (Array.isArray(signal.targetIds) && !signal.targetIds.map(Number).includes(selfId)) return;
 
+    const remotePeerId = Number(signal.senderId);
+    if (remotePeerId > 0 && typeof signal.cameraEnabled === "boolean") {
+      remoteCameraExpectedRef.current[remotePeerId] = signal.cameraEnabled;
+      const peer = peersRef.current[remotePeerId];
+      if (peer) reconcileRemoteVideo(remotePeerId, peer.pc);
+    }
+
     // SOCIALBIRD_CALL_SYSTEM_V4: stale-call-signal-guard
     if (type !== "CALL_INVITE") {
       const relevant = callRef.current || incomingRef.current;
@@ -1063,13 +1371,24 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
         // SOCIALBIRD_CALL_SYSTEM_V4: fresh-offer-after-accept
         if (selfId < peerId || active.direction === "outgoing") await makeOffer(peerId, true);
       }
+      // SOCIALBIRD_CALL_SYSTEM_V8: accepted-peer-camera-start
+      const localCamera = localStreamRef.current?.getVideoTracks().find((item) => item.readyState === "live") || null;
+      if (active.cameraEnabled && localCamera) await startOutgoingCameraTransport(active, peerId, localCamera);
       // V5: CALL_ACCEPT only starts/refreshes negotiation; real WebRTC connected marks active.
+      return;
+    }
+
+    if (type === "CALL_VIDEO_OFFER" || type === "CALL_VIDEO_ANSWER" || type === "CALL_VIDEO_ICE" || type === "CALL_VIDEO_STOP") {
+      await handleAuxCameraSignal(type, signal);
       return;
     }
 
     // SOCIALBIRD_CALL_SYSTEM_V5: remote-camera-resync
     if (type === "CALL_CAMERA_STATE") {
       const peerId = Number(signal.senderId);
+      remoteCameraExpectedRef.current[peerId] = Boolean(signal.cameraEnabled);
+      const cameraPeer = peersRef.current[peerId];
+      if (cameraPeer) reconcileRemoteVideo(peerId, cameraPeer.pc);
       if (cameraResyncTimersRef.current[peerId]) window.clearTimeout(cameraResyncTimersRef.current[peerId]);
       if (!signal.cameraEnabled) {
         setRemoteMedia((current) => {
@@ -1081,6 +1400,23 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
         });
         return;
       }
+
+      // SOCIALBIRD_CALL_SYSTEM_V6: restore-existing-unmuted-camera
+      // Re-enabling a previously negotiated sender may unmute the same receiver track
+      // without firing ontrack again. Restore that known stream immediately.
+      const screenId = expectedScreenStreamRef.current[peerId];
+      const knownCamera = Object.values(remoteStreamByIdRef.current).find((entry) =>
+        entry.peerId === peerId
+        && entry.stream.id !== screenId
+        && entry.stream.getVideoTracks().some((track) => track.readyState === "live" && !track.muted),
+      );
+      if (knownCamera) {
+        setRemoteMedia((current) => {
+          const previous = current[peerId] || {};
+          return { ...current, [peerId]: { ...previous, camera: knownCamera.stream } };
+        });
+      }
+
       cameraResyncTimersRef.current[peerId] = window.setTimeout(() => {
         const screenId = expectedScreenStreamRef.current[peerId];
         const hasLiveCamera = Object.values(remoteStreamByIdRef.current).some((entry) =>
@@ -1098,9 +1434,16 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
       const peerId = Number(signal.senderId);
       const track = localStreamRef.current?.getVideoTracks().find((item) => item.readyState === "live") || null;
       const bundle = peersRef.current[peerId];
-      if (active?.cameraEnabled && bundle && track) {
-        try { if (typeof bundle.cameraSender.setStreams === "function" && localStreamRef.current) bundle.cameraSender.setStreams(localStreamRef.current); } catch {}
-        await bundle.cameraSender.replaceTrack(track).catch(() => undefined);
+      if (active?.cameraEnabled && bundle && track && localStreamRef.current) {
+        // SOCIALBIRD_CALL_SYSTEM_V6: resync-real-camera-sender
+        if (!bundle.cameraSender) {
+          bundle.cameraSender = bundle.pc.addTrack(track, localStreamRef.current);
+        } else {
+          try {
+            if (typeof bundle.cameraSender.setStreams === "function") bundle.cameraSender.setStreams(localStreamRef.current);
+          } catch {}
+          await bundle.cameraSender.replaceTrack(track).catch(() => undefined);
+        }
         await makeOffer(peerId, true);
       }
       return;
@@ -1152,7 +1495,7 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
         finishCallLocally("remote-hangup");
       }
     }
-  }, [acceptIncoming, declineIncoming, finishCallLocally, handleAnswer, handleOffer, makeOffer, processIncomingInvite, removePeer]);
+  }, [acceptIncoming, declineIncoming, finishCallLocally, handleAnswer, handleAuxCameraSignal, handleOffer, makeOffer, processIncomingInvite, reconcileRemoteVideo, removePeer, startOutgoingCameraTransport]);
 
   useEffect(() => {
     if (!token) {
@@ -1199,10 +1542,7 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
       }
       if (detail.action === "answer") {
         autoAnswerRef.current = true;
-        pendingPushAnswerRef.current = true;
-        pendingPushAnswerRef.current = true;
-        pendingPushAnswerRef.current = true;
-        pendingPushAnswerRef.current = true;
+      pendingPushAnswerRef.current = true;
         if (incomingRef.current) void acceptIncoming();
       } else if (detail.action === "decline") {
         declineIncoming();
@@ -1230,9 +1570,6 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
     const acceptFromNativeRuntime = () => {
       autoAnswerRef.current = true;
       pendingPushAnswerRef.current = true;
-      pendingPushAnswerRef.current = true;
-      pendingPushAnswerRef.current = true;
-      pendingPushAnswerRef.current = true;
       try { sessionStorage.removeItem("itbird-native-answer-call"); } catch {}
       if (incomingRef.current) void acceptIncoming();
     };
@@ -1244,6 +1581,40 @@ export const CallProvider = ({ children }: { children: ReactNode }) => {
     window.addEventListener("itbird-native-answer-call", acceptFromNativeRuntime);
     return () => window.removeEventListener("itbird-native-answer-call", acceptFromNativeRuntime);
   }, [acceptIncoming]);
+
+  // SOCIALBIRD_CALL_SYSTEM_V7: desktop-receiver-watchdog
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const active = callRef.current;
+      if (!active) return;
+      const now = Date.now();
+      Object.values(peersRef.current).forEach((bundle) => {
+        reconcileRemoteVideo(bundle.peerId, bundle.pc);
+        if (remoteCameraExpectedRef.current[bundle.peerId] !== true) return;
+
+        const screenId = expectedScreenStreamRef.current[bundle.peerId];
+        const hasCameraReceiver = bundle.pc.getReceivers().some((receiver) => {
+          const track = receiver.track;
+          if (!track || track.kind !== "video" || track.readyState !== "live") return false;
+          const original = Object.values(remoteStreamByIdRef.current).find((entry) =>
+            entry.peerId === bundle.peerId && entry.stream.getVideoTracks().some((candidate) => candidate.id === track.id),
+          )?.stream;
+          return !screenId || !original || original.id !== screenId;
+        });
+
+        if (hasCameraReceiver) return;
+        const last = remoteVideoResyncAtRef.current[bundle.peerId] || 0;
+        if (now - last < 2200) return;
+        remoteVideoResyncAtRef.current[bundle.peerId] = now;
+        sendSignal("CALL_CAMERA_RESYNC", [bundle.peerId], {
+          ...active,
+          cameraEnabled: true,
+          reason: "receiver-watchdog",
+        });
+      });
+    }, 700);
+    return () => window.clearInterval(timer);
+  }, [reconcileRemoteVideo, sendSignal]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
