@@ -61,6 +61,20 @@ require_text() {
   echo "  OK: $label"
 }
 
+fetch_json() {
+  local url="$1"
+  local output="$2"
+  local label="$3"
+  local code
+  code="$(curl -sS -o "$output" -w '%{http_code}' "$url" || true)"
+  if [[ "$code" != "200" ]]; then
+    echo "Verification failed: $label returned HTTP $code ($url)" >&2
+    [[ -s "$output" ]] && cat "$output" >&2 || true
+    return 1
+  fi
+  echo "  OK: $label (HTTP 200)"
+}
+
 echo "[1/9] Fetching production feature files"
 sudo -u "$APP_USER" git fetch origin +"$BRANCH:refs/remotes/origin/$BRANCH"
 sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
@@ -133,15 +147,17 @@ for attempt in {1..30}; do
 done
 
 echo "[7/9] Verifying new production endpoints"
-curl -fsS http://127.0.0.1:5000/register/status -o /tmp/socialbird-register-status.json
-curl -fsS http://127.0.0.1:5000/admin/desktop/status -o /tmp/socialbird-admin-status.json
-curl -fsS https://api.socialbird.ru/push/public-key -o /tmp/socialbird-public-key.json
+fetch_json "http://127.0.0.1:5000/register/status" /tmp/socialbird-register-status.json "registration verification API"
+fetch_json "http://127.0.0.1:5000/admin/desktop/status" /tmp/socialbird-admin-status.json "local Admin Desktop API"
+fetch_json "https://api.socialbird.ru/admin/desktop/status" /tmp/socialbird-admin-public-status.json "public Admin Desktop API through nginx"
+fetch_json "https://api.socialbird.ru/native-push/status" /tmp/socialbird-native-public-status.json "public FCM status API through nginx"
 
 require_text /tmp/socialbird-native-status.json '"configured":true' "FCM backend still configured"
+require_text /tmp/socialbird-native-public-status.json '"configured":true' "public FCM backend still configured"
 require_text /tmp/socialbird-register-status.json '"emailVerification":true' "email verification enabled"
 require_text /tmp/socialbird-admin-status.json '"enabled":true' "Admin Desktop API enabled"
 require_text /tmp/socialbird-admin-status.json '"twoFactorRequired":true' "Admin Desktop email 2FA required"
-require_text /tmp/socialbird-public-key.json '"publicKey"' "public API reachable through api.socialbird.ru"
+require_text /tmp/socialbird-admin-public-status.json '"enabled":true' "Admin Desktop API publicly reachable"
 
 cat /tmp/socialbird-register-status.json
 echo
@@ -168,11 +184,18 @@ curl -fsS http://127.0.0.1:5000/register/status >/dev/null
 curl -fsS http://127.0.0.1:5000/admin/desktop/status >/dev/null
 curl -fsS http://127.0.0.1:5000/native-push/status >/dev/null
 
-rm -f /tmp/socialbird-native-status.json /tmp/socialbird-register-status.json /tmp/socialbird-admin-status.json /tmp/socialbird-public-key.json /tmp/socialbird-android-version.json
+rm -f \
+  /tmp/socialbird-native-status.json \
+  /tmp/socialbird-register-status.json \
+  /tmp/socialbird-admin-status.json \
+  /tmp/socialbird-admin-public-status.json \
+  /tmp/socialbird-native-public-status.json \
+  /tmp/socialbird-android-version.json
 trap - ERR
 chown -R "$APP_USER:$APP_USER" "$APP_DIR/backend" "$APP_DIR/src" "$APP_DIR/dist" 2>/dev/null || true
 
 echo
 echo "Verified registration + Admin Desktop API + Android update-awareness deployed successfully."
+echo "Admin Desktop smoke test uses the current FCM/native-push API; legacy WebPush public-key is no longer required."
 echo "Backup: $BACKUP_DIR"
 echo "Next: build/publish the updated Android APK and Admin Desktop installer."
