@@ -1,0 +1,109 @@
+import fs from 'node:fs';
+
+const backendMarker = '// SOCIALBIRD_CPARTY_PLAYLIST_V1: persistent-queue';
+const frontendMarker = '// SOCIALBIRD_CPARTY_PLAYLIST_V1: room-player';
+
+const replaceRequired = (source, from, to, label) => {
+  if (!source.includes(from)) throw new Error(`C-Party playlist V1 patch failed: ${label}`);
+  return source.replace(from, to);
+};
+
+const patchBackend = () => {
+  const file = 'backend/socialbird-final-platform.js';
+  let source = fs.readFileSync(file, 'utf8');
+  if (source.includes(backendMarker)) return;
+
+  source = replaceRequired(
+    source,
+    `                    media_url VARCHAR(700) NULL,\n                    playback_position DOUBLE NOT NULL DEFAULT 0,`,
+    `                    media_url VARCHAR(700) NULL,\n                    current_playlist_item_id BIGINT UNSIGNED NULL,\n                    playback_position DOUBLE NOT NULL DEFAULT 0,`,
+    'cinema_rooms current playlist column',
+  );
+
+  const messagesAnchor = `                await db.query(\`CREATE TABLE IF NOT EXISTS cinema_room_messages (`;
+  const schemaInsert = `${backendMarker}\n                try {\n                    await db.query('ALTER TABLE cinema_rooms ADD COLUMN current_playlist_item_id BIGINT UNSIGNED NULL AFTER media_url');\n                } catch (error) {\n                    if (error?.code !== 'ER_DUP_FIELDNAME') throw error;\n                }\n\n                await db.query(\`CREATE TABLE IF NOT EXISTS cinema_room_playlist (\n                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,\n                    room_id BIGINT UNSIGNED NOT NULL,\n                    sort_order BIGINT NOT NULL,\n                    source_type VARCHAR(16) NOT NULL DEFAULT 'upload',\n                    title_id BIGINT UNSIGNED NULL,\n                    episode_id BIGINT UNSIGNED NULL,\n                    media_url VARCHAR(700) NULL,\n                    display_title VARCHAR(255) NOT NULL,\n                    added_by BIGINT NOT NULL,\n                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,\n                    KEY idx_cinema_playlist_room (room_id, sort_order, id),\n                    CONSTRAINT fk_cinema_playlist_room FOREIGN KEY (room_id) REFERENCES cinema_rooms(id) ON DELETE CASCADE\n                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci\`);\n\n`;
+  source = replaceRequired(source, messagesAnchor, `${schemaInsert}${messagesAnchor}`, 'playlist schema anchor');
+
+  source = replaceRequired(
+    source,
+    `            cinemaResumableUpload: true,`,
+    `            cinemaResumableUpload: true,\n            cinemaPlaylistQueue: true,`,
+    'status capability',
+  );
+
+  const routeAnchor = `    app.delete('/cinema/rooms/:id', auth, async (req, res) => {`;
+  const routes = `    const loadPlaylistItems = async (roomId) => {\n        const [items] = await db.query(\`SELECT id, room_id, sort_order, source_type, title_id, episode_id, media_url, display_title, added_by, created_at\n            FROM cinema_room_playlist WHERE room_id = ? ORDER BY sort_order ASC, id ASC\`, [roomId]);\n        return items;\n    };\n\n    const getCurrentSourceTitle = async (room) => {\n        if (room.source_type === 'upload') return path.basename(String(room.media_url || 'Видео')) || 'Видео';\n        const [titles] = await db.query('SELECT title FROM cinema_titles WHERE id = ? LIMIT 1', [Number(room.title_id)]);\n        let label = String(titles[0]?.title || room.library_title || 'Видео');\n        if (room.episode_id) {\n            const [episodes] = await db.query('SELECT season_number, episode_number, episode_title FROM cinema_episodes WHERE id = ? LIMIT 1', [Number(room.episode_id)]);\n            if (episodes.length) label += \` · S\${episodes[0].season_number} E\${episodes[0].episode_number}\${episodes[0].episode_title ? \` · \${episodes[0].episode_title}\` : ''}\`;\n        }\n        return label.slice(0, 255);\n    };\n\n    const ensureCurrentPlaylistItem = async (roomId, room, userId) => {\n        const [existing] = await db.query('SELECT id FROM cinema_room_playlist WHERE room_id = ? ORDER BY sort_order ASC, id ASC LIMIT 1', [roomId]);\n        if (existing.length) {\n            if (!room.current_playlist_item_id) {\n                await db.query('UPDATE cinema_rooms SET current_playlist_item_id = ? WHERE id = ?', [Number(existing[0].id), roomId]);\n                room.current_playlist_item_id = Number(existing[0].id);\n            }\n            return Number(room.current_playlist_item_id || existing[0].id);\n        }\n\n        const displayTitle = await getCurrentSourceTitle(room);\n        const [insert] = await db.query(\`INSERT INTO cinema_room_playlist\n            (room_id, sort_order, source_type, title_id, episode_id, media_url, display_title, added_by)\n            VALUES (?, 10, ?, ?, ?, ?, ?, ?)\`, [roomId, room.source_type || 'library', room.title_id || null, room.episode_id || null, room.media_url || null, displayTitle, userId]);\n        await db.query('UPDATE cinema_rooms SET current_playlist_item_id = ? WHERE id = ?', [insert.insertId, roomId]);\n        room.current_playlist_item_id = Number(insert.insertId);\n        return Number(insert.insertId);\n    };\n\n    const resolvePlaylistSource = async (body) => {\n        const sourceType = body?.sourceType === 'upload' ? 'upload' : 'library';\n        if (sourceType === 'upload') {\n            const mediaUrl = String(body?.mediaUrl || '').trim().slice(0, 700);\n            if (!mediaUrl || !mediaUrl.startsWith('/cinema/media/')) return { error: 'Сначала загрузите видео в C-Party.' };\n            const displayTitle = String(body?.displayTitle || path.basename(mediaUrl) || 'Видео').trim().slice(0, 255) || 'Видео';\n            return { sourceType, titleId: null, episodeId: null, mediaUrl, displayTitle };\n        }\n\n        const titleId = Number(body?.titleId || 0);\n        const episodeId = body?.episodeId ? Number(body.episodeId) : null;\n        if (!titleId) return { error: 'Выберите видео из библиотеки.' };\n        const [titles] = await db.query('SELECT id, title, media_url FROM cinema_titles WHERE id = ? AND is_public = 1 LIMIT 1', [titleId]);\n        if (!titles.length) return { error: 'Видео из библиотеки не найдено.' };\n        let displayTitle = String(titles[0].title || 'Видео');\n        if (episodeId) {\n            const [episodes] = await db.query('SELECT id, season_number, episode_number, episode_title, media_url FROM cinema_episodes WHERE id = ? AND title_id = ? LIMIT 1', [episodeId, titleId]);\n            if (!episodes.length || !episodes[0].media_url) return { error: 'Серия не найдена или у неё нет видео.' };\n            displayTitle += \` · S\${episodes[0].season_number} E\${episodes[0].episode_number}\${episodes[0].episode_title ? \` · \${episodes[0].episode_title}\` : ''}\`;\n        } else if (!titles[0].media_url) {\n            return { error: 'У этого сериала нет основного видео. Выберите серию.' };\n        }\n        return { sourceType, titleId, episodeId, mediaUrl: null, displayTitle: displayTitle.slice(0, 255) };\n    };\n\n    const activatePlaylistItem = async (roomId, item) => {\n        await db.query(\`UPDATE cinema_rooms SET source_type = ?, title_id = ?, episode_id = ?, media_url = ?, current_playlist_item_id = ?,\n            playback_position = 0, playback_state = 'paused', playback_updated_at = NOW() WHERE id = ? AND is_active = 1\`,\n            [item.source_type, item.title_id || null, item.episode_id || null, item.media_url || null, item.id, roomId]);\n        return {\n            source_type: item.source_type,\n            title_id: item.title_id || null,\n            episode_id: item.episode_id || null,\n            media_url: item.media_url || null,\n            current_playlist_item_id: Number(item.id),\n            playback_position: 0,\n            effective_position: 0,\n            playback_state: 'paused',\n        };\n    };\n\n    app.get('/cinema/rooms/:id/playlist', auth, async (req, res) => {\n        await ensureSchema();\n        const roomId = Number(req.params.id);\n        const result = await loadRoomForViewer(roomId, getUserId(req), req.query.invite);\n        if (result.error) return res.status(result.error).json({ message: result.error === 403 ? 'Нет доступа к комнате.' : 'Комната не найдена.' });\n        res.json(await loadPlaylistItems(roomId));\n    });\n\n    app.post('/cinema/rooms/:id/playlist/initialize', auth, async (req, res) => {\n        await ensureSchema();\n        const roomId = Number(req.params.id);\n        const userId = getUserId(req);\n        const result = await loadRoomForViewer(roomId, userId, req.body?.invite);\n        if (result.error) return res.status(result.error).json({ message: 'Комната не найдена или недоступна.' });\n        if (Number(result.room.owner_id) !== userId) return res.status(403).json({ message: 'Создать плейлист может только создатель комнаты.' });\n        await ensureCurrentPlaylistItem(roomId, result.room, userId);\n        res.json({ initialized: true, items: await loadPlaylistItems(roomId) });\n    });\n\n    app.post('/cinema/rooms/:id/playlist', auth, async (req, res) => {\n        await ensureSchema();\n        const roomId = Number(req.params.id);\n        const userId = getUserId(req);\n        const result = await loadRoomForViewer(roomId, userId, req.body?.invite);\n        if (result.error) return res.status(result.error).json({ message: 'Комната не найдена или недоступна.' });\n        if (Number(result.room.owner_id) !== userId) return res.status(403).json({ message: 'Добавлять видео может только создатель комнаты.' });\n        await ensureCurrentPlaylistItem(roomId, result.room, userId);\n        const resolved = await resolvePlaylistSource(req.body || {});\n        if (resolved.error) return res.status(400).json({ message: resolved.error });\n        const [orderRows] = await db.query('SELECT COALESCE(MAX(sort_order), 0) AS max_order FROM cinema_room_playlist WHERE room_id = ?', [roomId]);\n        const sortOrder = Number(orderRows[0]?.max_order || 0) + 10;\n        const [insert] = await db.query(\`INSERT INTO cinema_room_playlist\n            (room_id, sort_order, source_type, title_id, episode_id, media_url, display_title, added_by)\n            VALUES (?, ?, ?, ?, ?, ?, ?, ?)\`,\n            [roomId, sortOrder, resolved.sourceType, resolved.titleId, resolved.episodeId, resolved.mediaUrl, resolved.displayTitle, userId]);\n        const [items] = await db.query('SELECT * FROM cinema_room_playlist WHERE id = ? LIMIT 1', [insert.insertId]);\n        res.status(201).json(items[0]);\n    });\n\n    app.post('/cinema/rooms/:id/playlist/:itemId/play', auth, async (req, res) => {\n        await ensureSchema();\n        const roomId = Number(req.params.id);\n        const itemId = Number(req.params.itemId);\n        const userId = getUserId(req);\n        const result = await loadRoomForViewer(roomId, userId, req.body?.invite);\n        if (result.error) return res.status(result.error).json({ message: 'Комната не найдена или недоступна.' });\n        if (Number(result.room.owner_id) !== userId) return res.status(403).json({ message: 'Управлять плейлистом может только создатель комнаты.' });\n        const [items] = await db.query('SELECT * FROM cinema_room_playlist WHERE id = ? AND room_id = ? LIMIT 1', [itemId, roomId]);\n        if (!items.length) return res.status(404).json({ message: 'Видео не найдено в плейлисте.' });\n        const room = await activatePlaylistItem(roomId, items[0]);\n        res.json({ played: true, room, item: items[0] });\n    });\n\n    app.post('/cinema/rooms/:id/playlist/next', auth, async (req, res) => {\n        await ensureSchema();\n        const roomId = Number(req.params.id);\n        const userId = getUserId(req);\n        const result = await loadRoomForViewer(roomId, userId, req.body?.invite);\n        if (result.error) return res.status(result.error).json({ message: 'Комната не найдена или недоступна.' });\n        if (Number(result.room.owner_id) !== userId) return res.status(403).json({ message: 'Управлять плейлистом может только создатель комнаты.' });\n        const currentId = await ensureCurrentPlaylistItem(roomId, result.room, userId);\n        const [currentRows] = await db.query('SELECT sort_order, id FROM cinema_room_playlist WHERE id = ? AND room_id = ? LIMIT 1', [currentId, roomId]);\n        const currentOrder = Number(currentRows[0]?.sort_order || 0);\n        const [nextRows] = await db.query('SELECT * FROM cinema_room_playlist WHERE room_id = ? AND (sort_order > ? OR (sort_order = ? AND id > ?)) ORDER BY sort_order ASC, id ASC LIMIT 1', [roomId, currentOrder, currentOrder, currentId]);\n        if (!nextRows.length) return res.json({ advanced: false, completed: true });\n        const room = await activatePlaylistItem(roomId, nextRows[0]);\n        res.json({ advanced: true, room, item: nextRows[0] });\n    });\n\n    app.delete('/cinema/rooms/:id/playlist/:itemId', auth, async (req, res) => {\n        await ensureSchema();\n        const roomId = Number(req.params.id);\n        const itemId = Number(req.params.itemId);\n        const userId = getUserId(req);\n        const [rooms] = await db.query('SELECT owner_id, current_playlist_item_id FROM cinema_rooms WHERE id = ? AND is_active = 1 LIMIT 1', [roomId]);\n        if (!rooms.length) return res.status(404).json({ message: 'Комната не найдена.' });\n        if (Number(rooms[0].owner_id) !== userId) return res.status(403).json({ message: 'Управлять плейлистом может только создатель комнаты.' });\n        if (Number(rooms[0].current_playlist_item_id) === itemId) return res.status(409).json({ message: 'Нельзя удалить видео, которое сейчас воспроизводится.' });\n        const [deleted] = await db.query('DELETE FROM cinema_room_playlist WHERE id = ? AND room_id = ?', [itemId, roomId]);\n        if (!deleted.affectedRows) return res.status(404).json({ message: 'Видео не найдено в плейлисте.' });\n        res.json({ deleted: true });\n    });\n\n`;
+  source = replaceRequired(source, routeAnchor, `${routes}${routeAnchor}`, 'playlist routes anchor');
+
+  if (!source.includes(backendMarker) || !source.includes("/cinema/rooms/:id/playlist/next")) throw new Error('C-Party playlist V1 backend verification failed');
+  fs.writeFileSync(file, source, 'utf8');
+};
+
+const patchRoom = () => {
+  const file = 'src/pages/CinemaPartyRoom.tsx';
+  let source = fs.readFileSync(file, 'utf8');
+  if (source.includes(frontendMarker)) return;
+
+  source = replaceRequired(
+    source,
+    `import { Input } from "@/components/ui/input";`,
+    `import { Input } from "@/components/ui/input";\nimport CinemaPlaylistPanel, { CinemaPlaylistSourcePatch } from "@/components/CinemaPlaylistPanel";\n${frontendMarker}`,
+    'playlist panel import',
+  );
+
+  source = replaceRequired(
+    source,
+    `  chat_enabled: number | boolean;\n  title_id?: number | null;`,
+    `  chat_enabled: number | boolean;\n  source_type?: "library" | "upload";\n  media_url?: string | null;\n  resolved_media_url?: string | null;\n  current_playlist_item_id?: number | null;\n  title_id?: number | null;`,
+    'room source fields',
+  );
+
+  source = replaceRequired(
+    source,
+    `  const nativeAndroidRef = useRef(isNativeAndroidClient());`,
+    `  const nativeAndroidRef = useRef(isNativeAndroidClient());\n  const activeMediaKeyRef = useRef("");`,
+    'media key ref',
+  );
+
+  source = replaceRequired(
+    source,
+    `  const roomUrl = useMemo(() => \`${'${window.location.origin}'}/c-party/room/${'${roomId}'}${'${invite ? `?invite=${encodeURIComponent(invite)}` : ""}'}\`, [roomId, invite]);\n  const streamUrl = useMemo(() => \`${'${api}'}/cinema/stream/${'${roomId}'}${'${invite ? `?invite=${encodeURIComponent(invite)}` : ""}'}\`, [roomId, invite]);`,
+    `  const roomUrl = useMemo(() => \`${'${window.location.origin}'}/c-party/room/${'${roomId}'}${'${invite ? `?invite=${encodeURIComponent(invite)}` : ""}'}\`, [roomId, invite]);\n  const mediaKey = String(room?.current_playlist_item_id || room?.episode_id || room?.title_id || room?.media_url || "initial");\n  const streamUrl = useMemo(() => {\n    const params = new URLSearchParams();\n    if (invite) params.set("invite", invite);\n    params.set("media", mediaKey);\n    return \`${'${api}'}/cinema/stream/${'${roomId}'}?${'${params.toString()}'}\`;\n  }, [roomId, invite, mediaKey]);`,
+    'cache-busted stream URL',
+  );
+
+  const loadSetRoom = `    setRoom(data);\n    return data as Room;`;
+  source = replaceRequired(source, loadSetRoom, `    setRoom(data);\n    activeMediaKeyRef.current = String(data?.current_playlist_item_id || data?.episode_id || data?.title_id || data?.media_url || "initial");\n    return data as Room;`, 'initial media key');
+
+  source = replaceRequired(
+    source,
+    `        const latest: Room = await response.json();\n        setRoom((current) => current ? { ...current, ...latest } : latest);\n        const video = videoRef.current;`,
+    `        const latest: Room = await response.json();\n        const nextMediaKey = String(latest.current_playlist_item_id || latest.episode_id || latest.title_id || latest.media_url || "initial");\n        const mediaChanged = nextMediaKey !== activeMediaKeyRef.current;\n        setRoom((current) => current ? { ...current, ...latest } : latest);\n        if (mediaChanged) {\n          activeMediaKeyRef.current = nextMediaKey;\n          applyingRemoteRef.current = true;\n          window.setTimeout(() => { applyingRemoteRef.current = false; }, 250);\n          return;\n        }\n        const video = videoRef.current;`,
+    'participant media switch detection',
+  );
+
+  const updateStateAnchor = `  const updateState = async (state: "playing" | "paused", episodeId?: number) => {`;
+  const sourceHandler = `  const applyPlaylistSource = (patch: CinemaPlaylistSourcePatch) => {\n    const nextKey = String(patch.current_playlist_item_id || patch.episode_id || patch.title_id || patch.media_url || Date.now());\n    activeMediaKeyRef.current = nextKey;\n    ownerAudioRef.current?.pause();\n    setRoom((current) => current ? { ...current, ...patch, playback_position: 0, effective_position: 0, playback_state: "paused" } : current);\n  };\n\n  useEffect(() => {\n    if (!room) return;\n    activeMediaKeyRef.current = mediaKey;\n    const video = videoRef.current;\n    const audio = ownerAudioRef.current;\n    if (video) {\n      video.pause();\n      try { video.currentTime = 0; } catch {}\n      video.load();\n    }\n    if (audio) {\n      audio.pause();\n      try { audio.currentTime = 0; } catch {}\n      audio.load();\n    }\n  }, [mediaKey]);\n\n  useEffect(() => {\n    const titleId = Number(room?.title_id || 0);\n    if (!titleId) {\n      setEpisodes([]);\n      return;\n    }\n    let cancelled = false;\n    fetch(\`${'${api}'}/cinema/library/${'${titleId}'}\`, { headers })\n      .then((response) => response.ok ? response.json() : null)\n      .then((title) => { if (!cancelled) setEpisodes(Array.isArray(title?.episodes) ? title.episodes : []); })\n      .catch(() => undefined);\n    return () => { cancelled = true; };\n  }, [room?.title_id]);\n\n  const handlePlaylistEnded = async () => {\n    if (!room?.is_owner) return;\n    ownerAudioRef.current?.pause();\n    try {\n      const response = await fetch(\`${'${api}'}/cinema/rooms/${'${roomId}'}/playlist/next\`, {\n        method: "POST",\n        headers: { ...headers, "Content-Type": "application/json" },\n        body: JSON.stringify({ invite }),\n      });\n      const data = await response.json().catch(() => ({}));\n      if (response.ok && data?.advanced && data?.room) {\n        applyPlaylistSource(data.room);\n        window.dispatchEvent(new CustomEvent("itbird-cinema-playlist-changed", { detail: { roomId: Number(roomId) } }));\n        return;\n      }\n    } catch {}\n    void updateState("paused");\n  };\n\n`;
+  source = replaceRequired(source, updateStateAnchor, `${sourceHandler}${updateStateAnchor}`, 'playlist player handlers');
+
+  source = replaceRequired(
+    source,
+    `          {room.is_owner && <Button variant="outline" size="sm" onClick={() => navigator.clipboard.writeText(roomUrl)}><Copy className="mr-2 h-4 w-4" />Ссылка</Button>}\n          {room.is_owner && <Button variant="destructive" size="sm" onClick={endRoom}><Square className="mr-2 h-4 w-4" />Завершить</Button>}`,
+    `          {room.is_owner && <Button variant="outline" size="sm" onClick={() => navigator.clipboard.writeText(roomUrl)}><Copy className="mr-2 h-4 w-4" />Ссылка</Button>}\n          <CinemaPlaylistPanel roomId={roomId} invite={invite} isOwner={Boolean(room.is_owner)} currentItemId={room.current_playlist_item_id} onSourceChanged={applyPlaylistSource} />\n          {room.is_owner && <Button variant="destructive" size="sm" onClick={endRoom}><Square className="mr-2 h-4 w-4" />Завершить</Button>}`,
+    'playlist room button',
+  );
+
+  source = replaceRequired(
+    source,
+    `                onVolumeChange={handleNativeVideoVolume}\n              />`,
+    `                onVolumeChange={handleNativeVideoVolume}\n                onEnded={() => void handlePlaylistEnded()}\n              />`,
+    'auto next on ended',
+  );
+
+  if (!source.includes(frontendMarker) || !source.includes('CinemaPlaylistPanel') || !source.includes('handlePlaylistEnded')) throw new Error('C-Party playlist V1 frontend verification failed');
+  fs.writeFileSync(file, source, 'utf8');
+};
+
+patchBackend();
+patchRoom();
+console.log('C-Party playlist V1 applied: persistent room queue, add/play/delete controls and automatic next-video playback.');
