@@ -1,4 +1,4 @@
-name: Call V6 video track build
+name: Call V7 remote video build
 
 on:
   push:
@@ -7,11 +7,11 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: socialbird-call-v6-${{ github.ref }}
+  group: socialbird-call-v7-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  call-v6-build:
+  call-v7-build:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -24,18 +24,19 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Apply Call V4 V5 V6
+      - name: Apply Call V4 V5 V6 V7
         run: |
           node deploy/apply-call-system-v4.mjs
           node deploy/apply-call-system-v5.mjs
           node deploy/apply-call-system-v5-push-state-fix.mjs
           node deploy/apply-call-system-v6-video-track.mjs
-          node --check deploy/apply-call-system-v6-video-track.mjs
+          node deploy/apply-call-system-v7-remote-video.mjs
+          node --check deploy/apply-call-system-v7-remote-video.mjs
           grep -q 'SOCIALBIRD_CALL_SYSTEM_V6: real-camera-sender' src/components/call/CallProvider.tsx
-          grep -q 'cameraSender: RTCRtpSender | null' src/components/call/CallProvider.tsx
-          grep -q 'bundle.pc.addTrack(track, local)' src/components/call/CallProvider.tsx
-          grep -q 'SOCIALBIRD_CALL_SYSTEM_V6: remote-video-unmute-refresh' src/components/call/CallProvider.tsx
-          grep -q 'SOCIALBIRD_CALL_SYSTEM_V6: restore-existing-unmuted-camera' src/components/call/CallProvider.tsx
+          grep -q 'SOCIALBIRD_CALL_SYSTEM_V7: receiver-reconciliation' src/components/call/CallProvider.tsx
+          grep -q 'SOCIALBIRD_CALL_SYSTEM_V7: dedicated-camera-track-stream' src/components/call/CallProvider.tsx
+          grep -q 'SOCIALBIRD_CALL_SYSTEM_V7: desktop-receiver-watchdog' src/components/call/CallProvider.tsx
+          grep -q 'pc.getReceivers()' src/components/call/CallProvider.tsx
 
       - name: Install frontend dependencies
         run: npm ci
