@@ -38,27 +38,37 @@ jobs:
 
       - name: Apply current production wiring
         run: |
-          # Call System V4 is the base owner; V5 extends that single manager with
-          # reliable push-answer, real connected-state, camera resync and per-user volume.
-          # Retired parallel call patchers must stay disabled.
           node deploy/apply-mail-recovery-fixes.mjs
           node deploy/apply-chat-media-mobile-fix.mjs
           node deploy/apply-chat-media-backend-fix.mjs
           node deploy/apply-native-android-integration.mjs
           node deploy/apply-native-fcm-push.mjs
           node deploy/apply-call-system-v4.mjs
-          node deploy/apply-call-system-v5.mjs
-          node deploy/apply-call-system-v5-push-state-fix.mjs
+          if grep -q 'SOCIALBIRD_CALL_SYSTEM_V8: dedicated-camera-transport' src/components/call/CallProvider.tsx; then
+            echo 'Generated Call V8 already present; preserving it instead of re-running superseded V5/V6/V7 mutators.'
+            node deploy/apply-call-system-v8-camera-transport.mjs
+          else
+            node deploy/apply-call-system-v5.mjs
+            node deploy/apply-call-system-v5-push-state-fix.mjs
+            node deploy/apply-call-system-v6-video-track.mjs
+            node deploy/apply-call-system-v7-remote-video.mjs
+            node deploy/apply-call-system-v8-camera-transport.mjs
+          fi
+          node deploy/apply-chat-expression-picker-v1.mjs
           node deploy/apply-seo-fixes.mjs
           node deploy/harden-source.mjs --in-place
           node deploy/enable-sandbox-compiler.mjs --in-place
           node deploy/patch-installer.mjs
 
-      - name: Check generated source and V5 invariants
+      - name: Check generated source and V8 invariants
         run: |
           node --check deploy/apply-call-system-v4.mjs
           node --check deploy/apply-call-system-v5.mjs
           node --check deploy/apply-call-system-v5-push-state-fix.mjs
+          node --check deploy/apply-call-system-v6-video-track.mjs
+          node --check deploy/apply-call-system-v7-remote-video.mjs
+          node --check deploy/apply-call-system-v8-camera-transport.mjs
+          node --check deploy/apply-chat-expression-picker-v1.mjs
           node --check deploy/apply-mail-recovery-fixes.mjs
           node --check deploy/apply-chat-media-mobile-fix.mjs
           node --check deploy/apply-chat-media-backend-fix.mjs
@@ -71,6 +81,7 @@ jobs:
           node --check deploy/ensure-vapid.mjs
           node --check deploy/generate-owner-recovery-codes.mjs
           node --check backend/server.js
+          node --check backend/stickers.js
           node --check backend/native-fcm-push.js
           node --check backend/password-recovery.js
           node --check backend/social-next-features.js
@@ -99,9 +110,19 @@ jobs:
           grep -q 'SOCIALBIRD_CALL_SYSTEM_V5: real-webrtc-connected-state' src/components/call/CallProvider.tsx
           grep -q 'SOCIALBIRD_CALL_SYSTEM_V5: cold-start-user-id-defer' src/components/call/CallProvider.tsx
           grep -q 'SOCIALBIRD_CALL_SYSTEM_V5: native-state-follows-real-phase' src/components/call/CallProvider.tsx
-          grep -q 'SOCIALBIRD_CALL_SYSTEM_V5: camera-renegotiation' src/components/call/CallProvider.tsx
           grep -q 'SOCIALBIRD_CALL_SYSTEM_V5: participant-volume-slider' src/components/GlobalCallOverlay.tsx
           grep -q 'SOCIALBIRD_CALL_SYSTEM_V5: resilient-remote-video' src/components/GlobalCallOverlay.tsx
+          grep -q 'SOCIALBIRD_CALL_SYSTEM_V8: dedicated-camera-transport' src/components/call/CallProvider.tsx
+          grep -q 'SOCIALBIRD_CALL_SYSTEM_V8: auxiliary-camera-sync' src/components/call/CallProvider.tsx
+          grep -q 'CALL_VIDEO_OFFER' src/components/call/CallProvider.tsx
+          grep -q 'CALL_VIDEO_ANSWER' src/components/call/CallProvider.tsx
+          grep -q 'CALL_VIDEO_ICE' src/components/call/CallProvider.tsx
+          grep -q 'CALL_VIDEO_STOP' src/components/call/CallProvider.tsx
+          grep -q 'SOCIALBIRD_CHAT_EXPRESSION_V1: portal-trigger' src/pages/Chats.tsx
+          grep -q 'SOCIALBIRD_CHAT_EXPRESSION_V1: portal-trigger' src/pages/GroupChats.tsx
+          grep -q 'data-chat-expression-picker="true"' src/components/ChatExpressionPicker.tsx
+          grep -q 'createPortal' src/components/ChatExpressionPicker.tsx
+          grep -q 'SOCIALBIRD_CHAT_EXPRESSION_V1: sticker-routes' backend/server.js
           grep -q 'Перевернуть камеру' src/components/GlobalCallOverlay.tsx
           grep -q 'Говорит' src/components/GlobalCallOverlay.tsx
           grep -q 'SOCIALBIRD_CALL_SYSTEM_V4: CallProvider owns CALL_\* signalling' src/components/RealtimeNotifications.tsx
@@ -161,6 +182,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add backend/server.js \
+            backend/stickers.js \
             backend/native-fcm-push.js \
             backend/social-next-features.js \
             backend/offline-call-queue.js \
@@ -177,6 +199,7 @@ jobs:
             src/lib/call-audio-reliability.ts \
             src/lib/call-media-bus.ts \
             src/lib/screen-share.ts \
+            src/lib/stickers.ts \
             src/components/AppSidebar.tsx \
             src/components/CallTrackVideo.tsx \
             src/components/FriendQrTools.tsx \
@@ -186,6 +209,8 @@ jobs:
             src/components/RealtimeNotifications.tsx \
             src/components/VoiceCallControls.tsx \
             src/components/GlobalCallOverlay.tsx \
+            src/components/ChatExpressionPicker.tsx \
+            src/components/StickerBubble.tsx \
             src/components/call/CallProvider.tsx \
             src/components/call/NativeCallAudioBridge.tsx \
             src/components/call/PushCallDeepLinkBridge.tsx \
@@ -202,6 +227,6 @@ jobs:
             src/pages/Chats.tsx \
             src/pages/GroupChats.tsx
           if ! git diff --cached --quiet; then
-            git commit -m "Apply generated production V5 call and platform fixes"
+            git commit -m "Apply generated production V8 call and platform fixes"
             git push origin HEAD:${GITHUB_REF_NAME}
           fi
