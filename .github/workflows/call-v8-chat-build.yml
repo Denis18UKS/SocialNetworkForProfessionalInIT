@@ -45,6 +45,7 @@ jobs:
           node deploy/apply-chat-expression-picker-v1.mjs
           node --check deploy/apply-call-system-v8-camera-transport.mjs
           node --check deploy/apply-chat-expression-picker-v1.mjs
+          node --check deploy/apply-final-backend-wiring-v1.mjs
           node --check backend/server.js
           bash -n deploy/update-socialbird-v8-chat-unrestricted.sh
           grep -q 'SOCIALBIRD_CALL_SYSTEM_V5: defer-answer-until-ready' src/components/call/CallProvider.tsx
@@ -62,6 +63,17 @@ jobs:
           grep -q 'data-chat-expression-picker="true"' src/components/ChatExpressionPicker.tsx
           grep -q 'createPortal' src/components/ChatExpressionPicker.tsx
           grep -q 'SOCIALBIRD_CHAT_EXPRESSION_V1: sticker-routes' backend/server.js
+
+          # Validate the VPS-only final backend restoration against the exact generated server
+          # without changing the source that this workflow commits.
+          cp backend/server.js /tmp/socialbird-server-before-final-wiring.js
+          node deploy/apply-final-backend-wiring-v1.mjs
+          grep -q 'SOCIALBIRD_FINAL_PLATFORM_V1: final-routes' backend/server.js
+          grep -q 'SOCIALBIRD_ADMIN_CINEMA_V1: routes' backend/server.js
+          grep -q 'registerSocialBirdFinalPlatform' backend/server.js
+          grep -q 'registerCinemaStream' backend/server.js
+          node --check backend/server.js
+          cp /tmp/socialbird-server-before-final-wiring.js backend/server.js
 
       - name: Install frontend dependencies
         run: npm ci
