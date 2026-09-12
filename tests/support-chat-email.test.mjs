@@ -31,6 +31,28 @@ test('mobile/touch Enter keeps a newline instead of sending', () => {
   assert.equal(shouldSendChatOnKeyDown({ key: 'Enter', shiftKey: false, coarsePointer: true }), false);
 });
 
+test('phone Enter stays a newline even when coarse-pointer detection is false', () => {
+  assert.equal(shouldSendChatOnKeyDown({
+    key: 'Enter',
+    shiftKey: false,
+    coarsePointer: false,
+    mobileUserAgent: true,
+    touchPoints: 5,
+    viewportWidth: 390,
+  }), false);
+});
+
+test('touchscreen desktop still allows Enter-to-send', () => {
+  assert.equal(shouldSendChatOnKeyDown({
+    key: 'Enter',
+    shiftKey: false,
+    coarsePointer: false,
+    mobileUserAgent: false,
+    touchPoints: 5,
+    viewportWidth: 1440,
+  }), true);
+});
+
 test('email notification preference defaults to enabled and accepts explicit off', () => {
   assert.equal(normalizeEmailNotificationsEnabled(undefined, true), true);
   assert.equal(normalizeEmailNotificationsEnabled(true, false), true);
