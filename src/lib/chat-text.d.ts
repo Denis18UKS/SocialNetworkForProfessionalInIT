@@ -7,6 +7,9 @@ export type ChatKeyDecisionInput = {
   key?: string;
   shiftKey?: boolean;
   coarsePointer?: boolean;
+  mobileUserAgent?: boolean;
+  touchPoints?: number;
+  viewportWidth?: number;
 };
 
 export function splitChatText(input?: string | null): ChatTextPart[];
