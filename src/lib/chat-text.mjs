@@ -29,6 +29,16 @@ export const splitChatText = (input = '') => {
   return parts.length > 0 ? parts : [{ type: 'text', value: text }];
 };
 
-export const shouldSendChatOnKeyDown = ({ key, shiftKey = false, coarsePointer = false } = {}) => (
-  key === 'Enter' && !shiftKey && !coarsePointer
-);
+export const shouldSendChatOnKeyDown = ({
+  key,
+  shiftKey = false,
+  coarsePointer = false,
+  mobileUserAgent = false,
+  touchPoints = 0,
+  viewportWidth = Number.POSITIVE_INFINITY,
+} = {}) => {
+  const narrowTouchDevice = Number(touchPoints) > 0 && Number(viewportWidth) <= 1024;
+  const mobileInput = Boolean(coarsePointer || mobileUserAgent || narrowTouchDevice);
+
+  return key === 'Enter' && !shiftKey && !mobileInput;
+};
