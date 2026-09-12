@@ -69,10 +69,14 @@ jobs:
         run: |
           grep -Fq 'SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: notification-preference-api' backend/server.js
           grep -Fq 'SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: personal-chat' src/pages/Chats.tsx
+          grep -Fq 'SOCIALBIRD_CHAT_MOBILE_ENTER_V2: personal' src/pages/Chats.tsx
           grep -Fq 'SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: group-chat' src/pages/GroupChats.tsx
+          grep -Fq 'SOCIALBIRD_CHAT_MOBILE_ENTER_V2: group' src/pages/GroupChats.tsx
           grep -Fq 'SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: settings' src/pages/Settings.tsx
           grep -Fq 'SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: support-route' src/App.tsx
           grep -Fq 'SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: support-nav' src/components/AppSidebar.tsx
+          grep -Fq 'SOCIALBIRD_CHAT_MOBILE_ENTER_V2: personal' deploy/update-support-chat-email-v1.sh
+          grep -Fq 'SOCIALBIRD_CHAT_MOBILE_ENTER_V2: group' deploy/update-support-chat-email-v1.sh
           test -s public/support-tbank-qr.png
           file public/support-tbank-qr.png | grep -Fq 'PNG image data'
           test "$(grep -Fc 'public/support-tbank-qr.png' deploy/update-support-chat-email-v1.sh)" -ge 3
