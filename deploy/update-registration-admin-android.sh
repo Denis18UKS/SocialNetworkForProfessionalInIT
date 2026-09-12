@@ -19,23 +19,35 @@ install -d -o root -g root -m 0750 "$BACKUP_DIR"
 BACKUP_FILES=(
   backend/server.js
   backend/server.production.js
+  backend/notification-preferences.js
+  src/App.tsx
   src/pages/Register.tsx
   src/pages/AndroidApp.tsx
+  src/pages/Settings.tsx
+  src/pages/Chats.tsx
+  src/pages/GroupChats.tsx
+  src/pages/SupportProject.tsx
   src/components/AppSidebar.tsx
+  src/components/ChatMessageText.tsx
+  src/components/EmailNotificationPreference.tsx
+  src/lib/chat-text.mjs
+  src/lib/chat-text.d.ts
 )
 
 for file in "${BACKUP_FILES[@]}"; do
   if [[ -e "$file" ]]; then
     mkdir -p "$BACKUP_DIR/$(dirname "$file")"
     cp -a "$file" "$BACKUP_DIR/$file"
+    printf '%s\n' "$file" >> "$BACKUP_DIR/present-files.txt"
   fi
 done
-[[ -d dist ]] && cp -a dist "$BACKUP_DIR/dist"
+[[ -d dist ]] && cp -al dist "$BACKUP_DIR/dist"
 
 rollback() {
   echo "Deployment failed; restoring previous SocialBIRD source/build..." >&2
   cd "$APP_DIR"
   for file in "${BACKUP_FILES[@]}"; do
+    rm -f "$file"
     if [[ -e "$BACKUP_DIR/$file" ]]; then
       mkdir -p "$(dirname "$file")"
       cp -a "$BACKUP_DIR/$file" "$file"
@@ -43,7 +55,7 @@ rollback() {
   done
   if [[ -d "$BACKUP_DIR/dist" ]]; then
     rm -rf dist
-    cp -a "$BACKUP_DIR/dist" dist
+    cp -al "$BACKUP_DIR/dist" dist
   fi
   chown -R "$APP_USER:$APP_USER" backend src dist 2>/dev/null || true
   cd "$APP_HOME"
@@ -81,12 +93,19 @@ sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   backend/registration-verification.js \
   backend/admin-desktop.js \
   backend/android-version.js \
+  backend/notification-preferences.js \
   deploy/apply-security-admin-update.mjs \
   deploy/apply-chat-media-backend-fix.mjs \
   deploy/apply-native-android-integration.mjs \
   deploy/apply-native-fcm-push.mjs \
+  deploy/apply-support-chat-email-v1.mjs \
   deploy/harden-source.mjs \
   deploy/enable-sandbox-compiler.mjs \
+  src/lib/chat-text.mjs \
+  src/lib/chat-text.d.ts \
+  src/components/ChatMessageText.tsx \
+  src/components/EmailNotificationPreference.tsx \
+  src/pages/SupportProject.tsx \
   src/pages/Register.tsx \
   src/pages/AndroidApp.tsx \
   src/components/AppSidebar.tsx
@@ -95,7 +114,9 @@ echo "[2/9] Checking new backend modules"
 node --check backend/registration-verification.js
 node --check backend/admin-desktop.js
 node --check backend/android-version.js
+node --check backend/notification-preferences.js
 node --check deploy/apply-security-admin-update.mjs
+node --check deploy/apply-support-chat-email-v1.mjs
 
 require_text backend/registration-verification.js "app.post('/register/verify'" "email verification endpoint"
 require_text backend/registration-verification.js "auth_rate_limits" "registration anti-bot rate limits"
@@ -103,17 +124,24 @@ require_text backend/admin-desktop.js "scope !== 'admin-desktop'" "separate admi
 require_text backend/admin-desktop.js "admin_desktop_audit" "admin audit log"
 require_text backend/android-version.js "SocialBIRD-Android-version.json" "Android release metadata source"
 
-echo "[3/9] Applying idempotent backend wiring"
+echo "[3/9] Applying idempotent backend and UX wiring"
 sudo -u "$APP_USER" node deploy/apply-chat-media-backend-fix.mjs
 sudo -u "$APP_USER" node deploy/apply-native-android-integration.mjs
 sudo -u "$APP_USER" node deploy/apply-native-fcm-push.mjs
 sudo -u "$APP_USER" node deploy/apply-security-admin-update.mjs
+sudo -u "$APP_USER" node deploy/apply-support-chat-email-v1.mjs
+sudo -u "$APP_USER" node deploy/apply-support-chat-email-v1.mjs
 
 require_text backend/server.js "registerEmailVerifiedRegistration({" "verified registration wired"
 require_text backend/server.js "registerAdminDesktop({ app, db, transporter, getOnlineUserIds });" "Admin Desktop API wired"
 require_text backend/server.js "registerAndroidVersion({ app });" "Android version API wired"
 require_text backend/server.js "const uploadChatMedia" "chat upload middleware preserved"
 require_text backend/server.js "NATIVE_FCM_PUSH: register-routes" "native FCM wiring preserved"
+require_text backend/server.js "SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: notification-preference-api" "email notification preference API preserved"
+require_text src/App.tsx "SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: support-route" "support route preserved"
+require_text src/components/AppSidebar.tsx "SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: support-nav" "support navigation preserved"
+require_text src/pages/Chats.tsx "SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: personal-chat" "personal chat multiline/link UX preserved"
+require_text src/pages/GroupChats.tsx "SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: group-chat" "group chat multiline/link UX preserved"
 
 echo "[4/9] Rebuilding hardened production API"
 sudo -u "$APP_USER" node deploy/harden-source.mjs
@@ -122,6 +150,7 @@ node --check backend/server.production.js
 require_text backend/server.production.js "registerEmailVerifiedRegistration({" "production verified registration"
 require_text backend/server.production.js "registerAdminDesktop({ app, db, transporter, getOnlineUserIds });" "production Admin Desktop API"
 require_text backend/server.production.js "NATIVE_FCM_PUSH: register-routes" "production FCM remains enabled"
+require_text backend/server.production.js "SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: notification-preference-api" "production email preference API preserved"
 require_text backend/server.production.js "PRODUCTION_HARDENING: sandboxed-compiler-route" "compiler sandbox remains enabled"
 
 echo "[5/9] Building production frontend"
@@ -152,12 +181,20 @@ fetch_json "http://127.0.0.1:5000/admin/desktop/status" /tmp/socialbird-admin-st
 fetch_json "https://api.socialbird.ru/admin/desktop/status" /tmp/socialbird-admin-public-status.json "public Admin Desktop API through nginx"
 fetch_json "https://api.socialbird.ru/native-push/status" /tmp/socialbird-native-public-status.json "public FCM status API through nginx"
 
+PREF_CODE="$(curl -sS -o /tmp/socialbird-notification-pref.json -w '%{http_code}' http://127.0.0.1:5000/notification-preferences || true)"
+[[ "$PREF_CODE" == "401" || "$PREF_CODE" == "403" ]] || { echo "Unexpected notification preference auth status: $PREF_CODE" >&2; false; }
+echo "  OK: notification preferences API mounted and protected ($PREF_CODE)"
+
 require_text /tmp/socialbird-native-status.json '"configured":true' "FCM backend still configured"
 require_text /tmp/socialbird-native-public-status.json '"configured":true' "public FCM backend still configured"
 require_text /tmp/socialbird-register-status.json '"emailVerification":true' "email verification enabled"
 require_text /tmp/socialbird-admin-status.json '"enabled":true' "Admin Desktop API enabled"
 require_text /tmp/socialbird-admin-status.json '"twoFactorRequired":true' "Admin Desktop email 2FA required"
 require_text /tmp/socialbird-admin-public-status.json '"enabled":true' "Admin Desktop API publicly reachable"
+
+SUPPORT_CODE="$(curl -sS -o /dev/null -w '%{http_code}' https://socialbird.ru/support || true)"
+[[ "$SUPPORT_CODE" =~ ^(200|301|302)$ ]] || { echo "Unexpected /support public status: $SUPPORT_CODE" >&2; false; }
+echo "  OK: support page is publicly reachable ($SUPPORT_CODE)"
 
 cat /tmp/socialbird-register-status.json
 echo
@@ -190,12 +227,14 @@ rm -f \
   /tmp/socialbird-admin-status.json \
   /tmp/socialbird-admin-public-status.json \
   /tmp/socialbird-native-public-status.json \
+  /tmp/socialbird-notification-pref.json \
   /tmp/socialbird-android-version.json
 trap - ERR
 chown -R "$APP_USER:$APP_USER" "$APP_DIR/backend" "$APP_DIR/src" "$APP_DIR/dist" 2>/dev/null || true
 
 echo
 echo "Verified registration + Admin Desktop API + Android update-awareness deployed successfully."
+echo "Preserved: support page, multiline/clickable chats, email notification preference, FCM and compiler sandbox."
 echo "Admin Desktop smoke test uses the current FCM/native-push API; legacy WebPush public-key is no longer required."
 echo "Backup: $BACKUP_DIR"
 echo "Next: build/publish the updated Android APK and Admin Desktop installer."
