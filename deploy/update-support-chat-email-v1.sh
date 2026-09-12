@@ -17,6 +17,7 @@ BACKUP_FILES=(
   backend/server.js
   backend/server.production.js
   backend/notification-preferences.js
+  public/support-tbank-qr.png
   src/App.tsx
   src/components/AppSidebar.tsx
   src/components/ChatMessageText.tsx
@@ -52,7 +53,7 @@ rollback() {
     rm -rf dist
     cp -al "$BACKUP_DIR/dist" dist
   fi
-  chown -R "$APP_USER:$APP_USER" backend src dist 2>/dev/null || true
+  chown -R "$APP_USER:$APP_USER" backend src public dist 2>/dev/null || true
   if [[ "$RESTARTED" -eq 1 ]]; then
     cd "$APP_HOME"
     sudo -u "$APP_USER" env PM2_HOME="$PM2_HOME_DIR" pm2 delete socialbird-api >/dev/null 2>&1 || true
@@ -77,6 +78,7 @@ echo "Remote HEAD: $REMOTE_HEAD"
 # already deployed wiring remain intact.
 sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   backend/notification-preferences.js \
+  public/support-tbank-qr.png \
   src/lib/chat-text.mjs src/lib/chat-text.d.ts \
   src/components/ChatMessageText.tsx src/components/EmailNotificationPreference.tsx \
   src/pages/SupportProject.tsx \
@@ -104,11 +106,8 @@ require_text backend/server.js "email_notifications_enabled" "email notification
 require_text backend/server.js "NATIVE_FCM_PUSH" "FCM wiring preserved"
 require_text backend/server.js "SOCIALBIRD_FINAL_PLATFORM_V1: final-routes" "final platform wiring preserved"
 
-if [[ -s public/support-tbank-qr.png ]]; then
-  echo "  OK: T-Bank support QR image is installed"
-else
-  echo "  WARNING: public/support-tbank-qr.png is not installed yet; /support will show the safe QR placeholder until the image is added." >&2
-fi
+test -s public/support-tbank-qr.png || { echo "T-Bank support QR image is missing after checkout." >&2; false; }
+echo "  OK: T-Bank support QR image is installed"
 
 echo "[4/8] Rebuilding hardened production API"
 sudo -u "$APP_USER" node deploy/harden-source.mjs
@@ -123,6 +122,7 @@ echo "[5/8] Building frontend"
 sudo -u "$APP_USER" npm run build
 test -s dist/index.html
 find dist/assets -maxdepth 1 -type f -name '*.js' -size +1k | grep -q .
+test -s dist/support-tbank-qr.png
 
 echo "[6/8] Restarting SocialBIRD API"
 RESTARTED=1
@@ -156,6 +156,9 @@ require_text /tmp/socialbird-support-native.json '"configured":true' "FCM remain
 PUBLIC_CODE="$(curl -sS -o /dev/null -w '%{http_code}' https://socialbird.ru/support || true)"
 [[ "$PUBLIC_CODE" =~ ^(200|301|302)$ ]] || { echo "Unexpected /support public status: $PUBLIC_CODE" >&2; false; }
 echo "  OK: /support responds through socialbird.ru ($PUBLIC_CODE)"
+QR_CODE="$(curl -sS -o /dev/null -w '%{http_code}' https://socialbird.ru/support-tbank-qr.png || true)"
+[[ "$QR_CODE" == "200" ]] || { echo "Unexpected support QR public status: $QR_CODE" >&2; false; }
+echo "  OK: support QR responds through socialbird.ru ($QR_CODE)"
 
 echo "[8/8] Saving stable PM2 state"
 sudo -u "$APP_USER" env PM2_HOME="$PM2_HOME_DIR" pm2 save
@@ -163,9 +166,9 @@ sleep 2
 sudo -u "$APP_USER" env PM2_HOME="$PM2_HOME_DIR" pm2 status
 rm -f /tmp/socialbird-support-native.json /tmp/socialbird-support-pref.json
 trap - ERR
-chown -R "$APP_USER:$APP_USER" "$APP_DIR/backend" "$APP_DIR/src" "$APP_DIR/dist" 2>/dev/null || true
+chown -R "$APP_USER:$APP_USER" "$APP_DIR/backend" "$APP_DIR/src" "$APP_DIR/public" "$APP_DIR/dist" 2>/dev/null || true
 
 echo
-echo "SocialBIRD support page + multiline/clickable chat + email notification preferences deployed successfully."
+echo "SocialBIRD support page + T-Bank QR + multiline/clickable chat + email notification preferences deployed successfully."
 echo "No chat/C-Party video size limit was introduced or changed."
 echo "Backup: $BACKUP_DIR"
