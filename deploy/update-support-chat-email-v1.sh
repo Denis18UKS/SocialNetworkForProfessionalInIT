@@ -97,7 +97,9 @@ sudo -u "$APP_USER" node deploy/apply-support-chat-email-v1.mjs
 sudo -u "$APP_USER" node deploy/apply-support-chat-email-v1.mjs
 
 require_text src/pages/Chats.tsx "SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: personal-chat" "personal chat multiline/link behavior"
+require_text src/pages/Chats.tsx "SOCIALBIRD_CHAT_MOBILE_ENTER_V2: personal" "personal chat mobile Enter keeps a newline"
 require_text src/pages/GroupChats.tsx "SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: group-chat" "group chat multiline/link behavior"
+require_text src/pages/GroupChats.tsx "SOCIALBIRD_CHAT_MOBILE_ENTER_V2: group" "group chat mobile Enter keeps a newline"
 require_text src/pages/Settings.tsx "SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: settings" "email preference settings"
 require_text src/App.tsx "SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: support-route" "support page route"
 require_text src/components/AppSidebar.tsx "SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: support-nav" "support navigation entry"
@@ -169,6 +171,7 @@ trap - ERR
 chown -R "$APP_USER:$APP_USER" "$APP_DIR/backend" "$APP_DIR/src" "$APP_DIR/public" "$APP_DIR/dist" 2>/dev/null || true
 
 echo
-echo "SocialBIRD support page + T-Bank QR + multiline/clickable chat + email notification preferences deployed successfully."
+echo "SocialBIRD support page + T-Bank QR + multiline/clickable chat + reliable mobile newline + email notification preferences deployed successfully."
+echo "On phones, Enter/newline does not send; sending is done with the send button."
 echo "No chat/C-Party video size limit was introduced or changed."
 echo "Backup: $BACKUP_DIR"
