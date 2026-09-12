@@ -25,10 +25,22 @@ FILES=(
   backend/admin-cinema-library.js
   backend/strict-privacy-gate.js
   backend/stable-news-time.js
+  backend/registration-verification.js
+  backend/admin-desktop.js
+  backend/android-version.js
+  backend/notification-preferences.js
+  src/App.tsx
   src/pages/Chats.tsx
   src/pages/GroupChats.tsx
+  src/pages/Settings.tsx
+  src/pages/SupportProject.tsx
   src/pages/CinemaPartyRoom.tsx
+  src/components/AppSidebar.tsx
+  src/components/ChatMessageText.tsx
+  src/components/EmailNotificationPreference.tsx
   src/components/CinemaPlaylistPanel.tsx
+  src/lib/chat-text.mjs
+  src/lib/chat-text.d.ts
   deploy/nginx-socialbird.conf.template
 )
 
@@ -86,24 +98,32 @@ sudo -u "$APP_USER" git fetch origin +"$BRANCH:refs/remotes/origin/$BRANCH"
 REMOTE_HEAD="$(sudo -u "$APP_USER" git rev-parse "refs/remotes/origin/$BRANCH")"
 echo "Remote HEAD: $REMOTE_HEAD"
 
-# Restore the current canonical production source first, then apply only the new
-# media/playlist transformations. This avoids stacking old call migrations over V8.
+# Restore canonical production source, then stack the current verified feature
+# patchers. Never run superseded Call V5/V6/V7 migrations over the Call V8 tree.
 sudo -u "$APP_USER" git checkout "origin/$BRANCH" -- \
   backend/server.js backend/socialbird-final-platform.js backend/cinema-stream.js \
   backend/admin-cinema-library.js backend/strict-privacy-gate.js backend/stable-news-time.js \
-  src/pages/Chats.tsx src/pages/GroupChats.tsx src/pages/CinemaPartyRoom.tsx \
-  src/components/CinemaPlaylistPanel.tsx \
+  backend/registration-verification.js backend/admin-desktop.js backend/android-version.js \
+  backend/notification-preferences.js \
+  src/App.tsx src/pages/Chats.tsx src/pages/GroupChats.tsx src/pages/Settings.tsx \
+  src/pages/SupportProject.tsx src/pages/CinemaPartyRoom.tsx \
+  src/components/AppSidebar.tsx src/components/ChatMessageText.tsx \
+  src/components/EmailNotificationPreference.tsx src/components/CinemaPlaylistPanel.tsx \
+  src/lib/chat-text.mjs src/lib/chat-text.d.ts \
   deploy/nginx-socialbird.conf.template \
   deploy/apply-chat-media-mobile-fix.mjs deploy/apply-chat-media-backend-fix.mjs \
   deploy/apply-chat-multi-upload-unlimited-video-v1.mjs \
   deploy/apply-cinema-unrestricted-storage.mjs \
   deploy/apply-cparty-playlist-v1.mjs deploy/apply-cparty-playlist-autoplay-v1.mjs \
-  deploy/apply-final-backend-wiring-v1.mjs \
+  deploy/apply-final-backend-wiring-v1.mjs deploy/apply-security-admin-update.mjs \
+  deploy/apply-support-chat-email-v1.mjs \
   deploy/harden-source.mjs deploy/enable-sandbox-compiler.mjs
 
 node --check deploy/apply-chat-multi-upload-unlimited-video-v1.mjs
 node --check deploy/apply-cparty-playlist-v1.mjs
 node --check deploy/apply-cparty-playlist-autoplay-v1.mjs
+node --check deploy/apply-security-admin-update.mjs
+node --check deploy/apply-support-chat-email-v1.mjs
 
 sudo -u "$APP_USER" node deploy/apply-chat-media-mobile-fix.mjs
 sudo -u "$APP_USER" node deploy/apply-chat-media-backend-fix.mjs
@@ -112,8 +132,10 @@ sudo -u "$APP_USER" node deploy/apply-cinema-unrestricted-storage.mjs
 sudo -u "$APP_USER" node deploy/apply-cparty-playlist-v1.mjs
 sudo -u "$APP_USER" node deploy/apply-cparty-playlist-autoplay-v1.mjs
 sudo -u "$APP_USER" node deploy/apply-final-backend-wiring-v1.mjs
+sudo -u "$APP_USER" node deploy/apply-security-admin-update.mjs
+sudo -u "$APP_USER" node deploy/apply-support-chat-email-v1.mjs
 
-echo "[2/9] Verifying chat multi-upload and unrestricted video"
+echo "[2/9] Verifying chat multi-upload, unrestricted video and chat UX"
 node --check backend/server.js
 require_text src/pages/Chats.tsx "SOCIALBIRD_CHAT_MULTI_UPLOAD_V1: personal" "personal chat multi-file queue"
 require_text src/pages/GroupChats.tsx "SOCIALBIRD_CHAT_MULTI_UPLOAD_V1: group" "group chat multi-file queue"
@@ -124,8 +146,10 @@ require_text src/pages/GroupChats.tsx "multiple" "group multiple file selector"
 require_text backend/server.js "SOCIALBIRD_CHAT_MULTI_UPLOAD_V1: unlimited-video-backend" "chat video backend has no Multer size cap"
 require_text backend/server.js "chatUpload.single('media')" "dedicated chat upload middleware"
 require_text deploy/nginx-socialbird.conf.template "SOCIALBIRD_CHAT_MULTI_UPLOAD_V1: unlimited-video-api-body" "nginx API template has unrestricted request body"
+require_text src/pages/Chats.tsx "SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: personal-chat" "personal multiline/linkified chat UX"
+require_text src/pages/GroupChats.tsx "SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: group-chat" "group multiline/linkified chat UX"
 
-echo "[3/9] Verifying C-Party playlist queue"
+echo "[3/9] Verifying C-Party, Admin Desktop and support wiring"
 node --check backend/socialbird-final-platform.js
 require_text backend/socialbird-final-platform.js "CPARTY_UNRESTRICTED_STORAGE_V1" "C-Party unrestricted storage preserved"
 require_text backend/socialbird-final-platform.js "SOCIALBIRD_CPARTY_PLAYLIST_V1: persistent-queue" "persistent playlist schema and routes"
@@ -139,6 +163,18 @@ require_text src/components/CinemaPlaylistPanel.tsx "multiple" "multiple C-Party
 require_text backend/server.js "SOCIALBIRD_FINAL_PLATFORM_V1: final-routes" "final platform wiring preserved"
 require_text backend/server.js "SOCIALBIRD_ADMIN_CINEMA_V1: routes" "Admin Cinema wiring preserved"
 require_text backend/server.js "NATIVE_FCM_PUSH" "FCM wiring preserved"
+require_text backend/server.js "SOCIALBIRD_SECURITY_ADMIN: email-registration-admin-desktop-android-version" "security/Admin Desktop wiring preserved"
+require_text backend/server.js "registerAdminDesktop({ app, db, transporter, getOnlineUserIds });" "Admin Desktop API preserved"
+require_text backend/server.js "SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: notification-preference-api" "email notification preference API preserved"
+require_text src/App.tsx "SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: support-route" "support route preserved"
+require_text src/components/AppSidebar.tsx "SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: support-nav" "support navigation preserved"
+require_text src/pages/Settings.tsx "SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: settings" "email preference settings preserved"
+
+if [[ -s public/support-tbank-qr.png ]]; then
+  echo "  OK: T-Bank support QR image is installed"
+else
+  echo "  WARNING: public/support-tbank-qr.png is not installed; the support page will show its safe placeholder." >&2
+fi
 
 echo "[4/9] Removing active Nginx API upload body cap"
 [[ -n "$NGINX_TARGET" ]] || { echo "Active SocialBIRD nginx config not found at $NGINX_LINK" >&2; false; }
@@ -184,7 +220,6 @@ path.write_text(updated)
 PY
 NGINX_CHANGED=1
 require_text "$NGINX_TARGET" "server_name api.socialbird.ru;" "API nginx server found"
-# Validate that the api server block specifically contains client_max_body_size 0.
 python3 - "$NGINX_TARGET" <<'PY'
 import pathlib, sys
 text = pathlib.Path(sys.argv[1]).read_text()
@@ -215,6 +250,8 @@ require_text backend/server.production.js "SOCIALBIRD_CHAT_MULTI_UPLOAD_V1: unli
 require_text backend/server.production.js "SOCIALBIRD_FINAL_PLATFORM_V1: final-routes" "final platform routes in production backend"
 require_text backend/server.production.js "SOCIALBIRD_ADMIN_CINEMA_V1: routes" "Admin Cinema in production backend"
 require_text backend/server.production.js "NATIVE_FCM_PUSH" "FCM in production backend"
+require_text backend/server.production.js "registerAdminDesktop({ app, db, transporter, getOnlineUserIds });" "Admin Desktop in production backend"
+require_text backend/server.production.js "SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: notification-preference-api" "email preference API in production backend"
 require_text backend/server.production.js "PRODUCTION_HARDENING: sandboxed-compiler-route" "compiler sandbox preserved"
 
 echo "[6/9] Building frontend"
@@ -236,12 +273,19 @@ for n in {1..30}; do
 done
 
 cd "$APP_DIR"
-echo "[8/9] Smoke testing platform and playlist schema"
+echo "[8/9] Smoke testing platform, Admin Desktop and preferences"
 curl -fsS http://127.0.0.1:5000/socialbird-final/status >/tmp/socialbird-media-final.json
+curl -fsS http://127.0.0.1:5000/admin/desktop/status >/tmp/socialbird-media-admin.json
 require_text /tmp/socialbird-media-final.json '"enabled":true' "final platform enabled"
 require_text /tmp/socialbird-media-final.json '"cinemaParty":true' "C-Party remains enabled"
 require_text /tmp/socialbird-media-final.json '"cinemaPlaylistQueue":true' "C-Party playlist capability enabled and schema initialized"
 require_text /tmp/socialbird-media-native.json '"configured":true' "FCM remains configured"
+require_text /tmp/socialbird-media-admin.json '"enabled":true' "Admin Desktop API remains enabled"
+require_text /tmp/socialbird-media-admin.json '"twoFactorRequired":true' "Admin Desktop 2FA remains required"
+
+PREF_CODE="$(curl -sS -o /tmp/socialbird-media-pref.json -w '%{http_code}' http://127.0.0.1:5000/notification-preferences || true)"
+[[ "$PREF_CODE" == "401" || "$PREF_CODE" == "403" ]] || { echo "Unexpected notification preferences status: $PREF_CODE" >&2; false; }
+echo "  OK: notification preferences API mounted and protected ($PREF_CODE)"
 
 CHAT_CODE="$(curl -sS -o /tmp/socialbird-media-chat.json -w '%{http_code}' -X POST http://127.0.0.1:5000/messages/upload || true)"
 [[ "$CHAT_CODE" == "401" || "$CHAT_CODE" == "403" ]] || { echo "Unexpected unauthenticated chat upload status: $CHAT_CODE" >&2; false; }
@@ -249,18 +293,19 @@ echo "  OK: personal chat upload route mounted and protected"
 GROUP_CODE="$(curl -sS -o /tmp/socialbird-media-group.json -w '%{http_code}' -X POST http://127.0.0.1:5000/group-chats/0/upload || true)"
 [[ "$GROUP_CODE" == "401" || "$GROUP_CODE" == "403" ]] || { echo "Unexpected unauthenticated group upload status: $GROUP_CODE" >&2; false; }
 echo "  OK: group chat upload route mounted and protected"
-PUBLIC_CODE="$(curl -sS -o /dev/null -w '%{http_code}' https://socialbird.ru || true)"
-[[ "$PUBLIC_CODE" =~ ^(200|301|302)$ ]] || { echo "Unexpected public site status: $PUBLIC_CODE" >&2; false; }
-echo "  OK: public site responds ($PUBLIC_CODE)"
+PUBLIC_CODE="$(curl -sS -o /dev/null -w '%{http_code}' https://socialbird.ru/support || true)"
+[[ "$PUBLIC_CODE" =~ ^(200|301|302)$ ]] || { echo "Unexpected public support status: $PUBLIC_CODE" >&2; false; }
+echo "  OK: public support page responds ($PUBLIC_CODE)"
 
 echo "[9/9] Saving PM2 state"
 sudo -u "$APP_USER" env PM2_HOME="$PM2_HOME_DIR" pm2 save
 sudo -u "$APP_USER" env PM2_HOME="$PM2_HOME_DIR" pm2 status
+rm -f /tmp/socialbird-media-native.json /tmp/socialbird-media-final.json /tmp/socialbird-media-admin.json /tmp/socialbird-media-pref.json /tmp/socialbird-media-chat.json /tmp/socialbird-media-group.json
 chown -R "$APP_USER:$APP_USER" backend src dist 2>/dev/null || true
 trap - ERR
 
 echo
 echo "SocialBIRD chat multi-upload + unrestricted video + C-Party playlist deployed successfully."
-echo "Included: multi-file chat selection, three concurrent upload workers, unlimited video upload size, persistent C-Party playlist and automatic next-video playback."
-echo "Preserved: Call V8, emoji/stickers, final platform routes, C-Party unrestricted storage, Admin Cinema, FCM and compiler sandbox."
+echo "Included: multi-file chat selection, three concurrent upload workers, unlimited video upload size, persistent C-Party playlist, automatic next-video playback, multiline/clickable chat, support page and email notification preference."
+echo "Preserved: Call V8, emoji/stickers, final platform routes, C-Party unrestricted storage, Admin Cinema, Admin Desktop, verified registration, FCM and compiler sandbox."
 echo "Backup: $BACKUP_DIR"
