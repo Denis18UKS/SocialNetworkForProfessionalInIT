@@ -75,7 +75,7 @@ jobs:
           grep -Fq 'SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: support-nav' src/components/AppSidebar.tsx
           test -s public/support-tbank-qr.png
           file public/support-tbank-qr.png | grep -Fq 'PNG image data'
-          grep -Fq 'public/support-tbank-qr.png' deploy/update-support-chat-email-v1.sh
+          test "$(grep -Fc 'public/support-tbank-qr.png' deploy/update-support-chat-email-v1.sh)" -ge 3
           grep -Fq 'apply-support-chat-email-v1.mjs' deploy/update-registration-admin-android.sh
           grep -Fq 'apply-support-chat-email-v1.mjs' deploy/update-socialbird-media-playlist-unrestricted.sh
           grep -Fq 'registerAdminDesktop({ app, db, transporter, getOnlineUserIds });' deploy/update-socialbird-media-playlist-unrestricted.sh
