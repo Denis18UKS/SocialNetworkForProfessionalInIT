@@ -15,6 +15,10 @@ const replaceRequired = (source, search, replacement, label) => {
   return source.replace(search, replacement);
 };
 
+const personalMobileEnterHandlerV2 = `    // SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: personal-chat\n    // SOCIALBIRD_CHAT_MOBILE_ENTER_V2: personal\n    const handleKeyDown = (e: React.KeyboardEvent) => {\n        const coarsePointer = window.matchMedia?.('(pointer: coarse)').matches ?? false;\n        const mobileUserAgent = /Android|iPhone|iPad|iPod|Mobile|IEMobile|Opera Mini/i.test(navigator.userAgent || '');\n        const touchPoints = navigator.maxTouchPoints || 0;\n        const viewportWidth = window.visualViewport?.width ?? window.innerWidth;\n        if (shouldSendChatOnKeyDown({\n            key: e.key,\n            shiftKey: e.shiftKey,\n            coarsePointer,\n            mobileUserAgent,\n            touchPoints,\n            viewportWidth,\n        })) {\n            e.preventDefault();\n            sendMessage();\n        }\n    };`;
+
+const groupMobileEnterHandlerV2 = `    // SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: group-chat\n    // SOCIALBIRD_CHAT_MOBILE_ENTER_V2: group\n    const handleKeyDown = (e: React.KeyboardEvent) => {\n        const coarsePointer = window.matchMedia?.('(pointer: coarse)').matches ?? false;\n        const mobileUserAgent = /Android|iPhone|iPad|iPod|Mobile|IEMobile|Opera Mini/i.test(navigator.userAgent || '');\n        const touchPoints = navigator.maxTouchPoints || 0;\n        const viewportWidth = window.visualViewport?.width ?? window.innerWidth;\n        if (shouldSendChatOnKeyDown({\n            key: e.key,\n            shiftKey: e.shiftKey,\n            coarsePointer,\n            mobileUserAgent,\n            touchPoints,\n            viewportWidth,\n        })) {\n            e.preventDefault();\n            sendMessage();\n        }\n    };`;
+
 const patchPersonalChat = () => {
   const file = 'src/pages/Chats.tsx';
   let source = read(file);
@@ -30,7 +34,7 @@ const patchPersonalChat = () => {
   source = replaceRequired(
     source,
     `    const handleKeyDown = (e: React.KeyboardEvent) => {\n        if (e.key === 'Enter' && !e.shiftKey) {\n            e.preventDefault();\n            sendMessage();\n        }\n    };`,
-    `    // SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: personal-chat\n    const handleKeyDown = (e: React.KeyboardEvent) => {\n        const coarsePointer = window.matchMedia?.('(pointer: coarse)').matches ?? false;\n        if (shouldSendChatOnKeyDown({ key: e.key, shiftKey: e.shiftKey, coarsePointer })) {\n            e.preventDefault();\n            sendMessage();\n        }\n    };`,
+    personalMobileEnterHandlerV2,
     'personal chat multiline Enter behavior',
   );
 
@@ -65,7 +69,7 @@ const patchGroupChat = () => {
   source = replaceRequired(
     source,
     `    const handleKeyDown = (e: React.KeyboardEvent) => {\n        if (e.key === 'Enter' && !e.shiftKey) {\n            e.preventDefault();\n            sendMessage();\n        }\n    };`,
-    `    // SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: group-chat\n    const handleKeyDown = (e: React.KeyboardEvent) => {\n        const coarsePointer = window.matchMedia?.('(pointer: coarse)').matches ?? false;\n        if (shouldSendChatOnKeyDown({ key: e.key, shiftKey: e.shiftKey, coarsePointer })) {\n            e.preventDefault();\n            sendMessage();\n        }\n    };`,
+    groupMobileEnterHandlerV2,
     'group chat multiline Enter behavior',
   );
 
@@ -83,6 +87,32 @@ const patchGroupChat = () => {
   );
 
   write(file, source);
+};
+
+const upgradeMobileEnterBehavior = () => {
+  const upgrades = [
+    {
+      file: 'src/pages/Chats.tsx',
+      marker: 'SOCIALBIRD_CHAT_MOBILE_ENTER_V2: personal',
+      oldHandler: `    // SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: personal-chat\n    const handleKeyDown = (e: React.KeyboardEvent) => {\n        const coarsePointer = window.matchMedia?.('(pointer: coarse)').matches ?? false;\n        if (shouldSendChatOnKeyDown({ key: e.key, shiftKey: e.shiftKey, coarsePointer })) {\n            e.preventDefault();\n            sendMessage();\n        }\n    };`,
+      newHandler: personalMobileEnterHandlerV2,
+      label: 'personal mobile Enter v2 upgrade',
+    },
+    {
+      file: 'src/pages/GroupChats.tsx',
+      marker: 'SOCIALBIRD_CHAT_MOBILE_ENTER_V2: group',
+      oldHandler: `    // SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: group-chat\n    const handleKeyDown = (e: React.KeyboardEvent) => {\n        const coarsePointer = window.matchMedia?.('(pointer: coarse)').matches ?? false;\n        if (shouldSendChatOnKeyDown({ key: e.key, shiftKey: e.shiftKey, coarsePointer })) {\n            e.preventDefault();\n            sendMessage();\n        }\n    };`,
+      newHandler: groupMobileEnterHandlerV2,
+      label: 'group mobile Enter v2 upgrade',
+    },
+  ];
+
+  for (const upgrade of upgrades) {
+    let source = read(upgrade.file);
+    if (source.includes(upgrade.marker)) continue;
+    source = replaceRequired(source, upgrade.oldHandler, upgrade.newHandler, upgrade.label);
+    write(upgrade.file, source);
+  }
 };
 
 const patchSettings = () => {
@@ -180,6 +210,7 @@ const patchBackend = () => {
 
 patchPersonalChat();
 patchGroupChat();
+upgradeMobileEnterBehavior();
 patchSettings();
 patchSidebar();
 patchApp();
@@ -187,7 +218,9 @@ patchBackend();
 
 const requiredMarkers = [
   ['src/pages/Chats.tsx', 'SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: personal-chat'],
+  ['src/pages/Chats.tsx', 'SOCIALBIRD_CHAT_MOBILE_ENTER_V2: personal'],
   ['src/pages/GroupChats.tsx', 'SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: group-chat'],
+  ['src/pages/GroupChats.tsx', 'SOCIALBIRD_CHAT_MOBILE_ENTER_V2: group'],
   ['src/pages/Settings.tsx', 'SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: settings'],
   ['src/components/AppSidebar.tsx', 'SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: support-nav'],
   ['src/App.tsx', 'SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: support-route'],
@@ -198,4 +231,4 @@ for (const [file, marker] of requiredMarkers) {
   if (!read(file).includes(marker)) throw new Error(`Missing ${marker} in ${file}`);
 }
 
-console.log('SocialBIRD support page, multiline/linkified chat and email notification preferences are current.');
+console.log('SocialBIRD support page, multiline/linkified chat, mobile Enter v2 and email notification preferences are current.');
