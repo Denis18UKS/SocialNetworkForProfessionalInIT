@@ -1,0 +1,68 @@
+name: Support chat email UX
+
+on:
+  push:
+    branches:
+      - deploy/socialbird-vps-production
+    paths:
+      - 'tests/support-chat-email.test.mjs'
+      - 'src/lib/chat-text.mjs'
+      - 'src/lib/chat-text.d.ts'
+      - 'src/components/ChatMessageText.tsx'
+      - 'src/components/EmailNotificationPreference.tsx'
+      - 'src/pages/SupportProject.tsx'
+      - 'src/pages/Chats.tsx'
+      - 'src/pages/GroupChats.tsx'
+      - 'src/pages/Settings.tsx'
+      - 'src/components/AppSidebar.tsx'
+      - 'src/App.tsx'
+      - 'backend/notification-preferences.js'
+      - 'backend/server.js'
+      - 'deploy/apply-support-chat-email-v1.mjs'
+      - 'deploy/update-support-chat-email-v1.sh'
+      - '.github/workflows/support-chat-email-build.yml'
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Install backend dependencies
+        run: npm ci --prefix backend
+
+      - name: Unit tests
+        run: node --test tests/support-chat-email.test.mjs
+
+      - name: Apply UX patch idempotently
+        run: |
+          node deploy/apply-support-chat-email-v1.mjs
+          node deploy/apply-support-chat-email-v1.mjs
+
+      - name: Backend syntax
+        run: |
+          node --check backend/server.js
+          node --check backend/notification-preferences.js
+
+      - name: Frontend build
+        run: npm run build
+
+      - name: Verify feature markers
+        run: |
+          grep -Fq 'SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: notification-preference-api' backend/server.js
+          grep -Fq 'SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: personal-chat' src/pages/Chats.tsx
+          grep -Fq 'SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: group-chat' src/pages/GroupChats.tsx
+          grep -Fq 'SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: settings' src/pages/Settings.tsx
+          grep -Fq 'SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: support-route' src/App.tsx
+          grep -Fq 'SOCIALBIRD_SUPPORT_CHAT_EMAIL_V1: support-nav' src/components/AppSidebar.tsx
