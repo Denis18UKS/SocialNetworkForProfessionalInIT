@@ -1,0 +1,33 @@
+name: Hackathons resilience build
+
+on:
+  push:
+    branches:
+      - deploy/socialbird-vps-production
+    paths:
+      - 'tests/hackathons-resilience.test.mjs'
+      - 'backend/server.js'
+      - 'deploy/apply-hackathons-resilience-v2.mjs'
+      - 'deploy/update-hackathons-resilience-v2.sh'
+      - 'deploy/update-socialbird-media-playlist-unrestricted.sh'
+      - 'deploy/update-registration-admin-android.sh'
+      - '.github/workflows/hackathons-resilience-build.yml'
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Regression tests
+        run: node --test tests/hackathons-resilience.test.mjs
+
+      - name: Syntax checks
+        run: node --check backend/server.js
