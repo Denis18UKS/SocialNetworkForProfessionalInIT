@@ -14,6 +14,9 @@ on:
       - '.github/workflows/hackathons-resilience-build.yml'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -26,8 +29,29 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Apply hackathons fix idempotently
+        run: |
+          node deploy/apply-hackathons-resilience-v2.mjs
+          node deploy/apply-hackathons-resilience-v2.mjs
+
       - name: Regression tests
         run: node --test tests/hackathons-resilience.test.mjs
 
-      - name: Syntax checks
-        run: node --check backend/server.js
+      - name: Syntax and updater checks
+        run: |
+          node --check backend/server.js
+          node --check deploy/apply-hackathons-resilience-v2.mjs
+          bash -n deploy/update-hackathons-resilience-v2.sh
+          git diff --check
+
+      - name: Materialize verified source on production branch
+        run: |
+          if git diff --quiet -- backend/server.js; then
+            echo "backend/server.js already contains the verified hackathons fix"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/server.js
+          git commit -m "Apply hackathons resilience v2 to production source"
+          git push origin HEAD:deploy/socialbird-vps-production
