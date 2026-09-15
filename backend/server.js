@@ -3307,32 +3307,44 @@ app.get('/hackathons', async (req, res) => {
         });
     }
 
-    // APP_FIX: hackathons-safe-browser
+    // APP_FIX: hackathons-resilient-v2
+    // Tilda feeds may keep analytics/network requests open. Wait for the feed itself,
+    // bound lazy-load scrolling, and never block the API on every image finishing.
     let browser = null;
 
     try {
         browser = await puppeteer.launch({
             headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox'],
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
         });
         const page = await browser.newPage();
-        await page.goto('https://hackathons.pro/', { waitUntil: 'networkidle2', timeout: 60000 });
+        page.setDefaultNavigationTimeout(30000);
+        await page.goto('https://hackathons.pro/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await page.waitForSelector('.js-feed-post', { timeout: 20000 });
 
         await page.evaluate(async () => {
-            const distance = 100;
-            const delay = 100;
-            while (document.body.scrollHeight > window.scrollY + window.innerHeight) {
-                window.scrollBy(0, distance);
-                await new Promise(resolve => setTimeout(resolve, delay));
-            }
-        });
+            const distance = 500;
+            const delay = 120;
+            const maxScrollSteps = 40;
+            let scrollSteps = 0;
+            let stableBottomChecks = 0;
+            let previousHeight = document.body.scrollHeight;
 
-        await page.evaluate(() => {
-            const images = Array.from(document.querySelectorAll('img'));
-            return Promise.all(images.map(img => {
-                if (img.complete) return Promise.resolve();
-                return new Promise(resolve => img.onload = resolve);
-            }));
+            while (scrollSteps < maxScrollSteps) {
+                window.scrollBy(0, distance);
+                scrollSteps += 1;
+                await new Promise(resolve => setTimeout(resolve, delay));
+
+                const currentHeight = document.body.scrollHeight;
+                const reachedBottom = window.scrollY + window.innerHeight >= currentHeight - 2;
+                if (reachedBottom && currentHeight === previousHeight) {
+                    stableBottomChecks += 1;
+                    if (stableBottomChecks >= 2) break;
+                } else {
+                    stableBottomChecks = 0;
+                }
+                previousHeight = currentHeight;
+            }
         });
 
         const htmlContent = await page.evaluate(() => {
@@ -3386,9 +3398,11 @@ app.get('/hackathons', async (req, res) => {
             }).filter((item) => item.title && item.link !== '#');
         });
 
-        if (!htmlContent) {
-            res.status(404).json({ message: 'Блок с хакатонами не найден.' });
-        } else {
+        if (hackathonItems.length === 0) {
+            throw new Error('HACKATHON_FEED_EMPTY');
+        }
+
+        {
             const sourceSignature = crypto
                 .createHash('sha1')
                 .update(hackathonItems.map((item) => `${item.link}|${item.title}`).join('\n'))
@@ -3432,12 +3446,9 @@ app.get('/hackathons', async (req, res) => {
                 stale: true,
             });
         }
-        const browserUnavailable = /Could not find Chrome|Failed to launch|browser executable/i.test(String(err?.message || err));
-        res.status(browserUnavailable ? 503 : 500).json({
-            message: browserUnavailable
-                ? 'Сервис хакатонов временно недоступен: браузер-парсер не установлен.'
-                : 'Ошибка при загрузке данных',
-            code: browserUnavailable ? 'HACKATHON_BROWSER_UNAVAILABLE' : 'HACKATHON_FETCH_FAILED',
+        res.status(503).json({
+            message: 'Сервис хакатонов временно недоступен. Попробуйте ещё раз через минуту.',
+            code: 'HACKATHON_UPSTREAM_UNAVAILABLE',
         });
     } finally {
         if (browser) await browser.close().catch(() => undefined);
