@@ -89,11 +89,24 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Configure preinstalled Android SDK
+        shell: bash
+        run: |
+          test -n "${ANDROID_SDK_ROOT:-}" || export ANDROID_SDK_ROOT="/usr/local/lib/android/sdk"
+          test -d "$ANDROID_SDK_ROOT" || { echo "Android SDK not found at $ANDROID_SDK_ROOT"; exit 4; }
+          SDKMANAGER="$(find "$ANDROID_SDK_ROOT/cmdline-tools" -type f -name sdkmanager 2>/dev/null | sort -V | tail -n 1)"
+          test -x "$SDKMANAGER" || { echo "sdkmanager not found in preinstalled Android SDK"; exit 4; }
+          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          "$SDKMANAGER" --version
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
 
       - name: Install Android 35 platform
-        run: yes | sdkmanager "platforms;android-35" "build-tools;35.0.0"
+        shell: bash
+        run: |
+          SDKMANAGER="$(command -v sdkmanager)"
+          yes | "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
