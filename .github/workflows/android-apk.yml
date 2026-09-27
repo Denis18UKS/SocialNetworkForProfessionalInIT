@@ -106,7 +106,11 @@ jobs:
         shell: bash
         run: |
           SDKMANAGER="$(command -v sdkmanager)"
+          set +o pipefail
           yes | "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
+          SDK_STATUS=${PIPESTATUS[1]}
+          set -o pipefail
+          exit "$SDK_STATUS"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
