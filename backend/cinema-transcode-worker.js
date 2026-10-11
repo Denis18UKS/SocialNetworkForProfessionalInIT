@@ -63,10 +63,6 @@ const main = async () => {
   ]);
   const probe = JSON.parse(stdout || '{}');
   const streams = Array.isArray(probe.streams) ? probe.streams : [];
-  const video = streams.find((stream) => stream.codec_type === 'video');
-  const audio = streams.find((stream) => stream.codec_type === 'audio');
-  if (!video?.codec_name) throw new Error('Видео-поток не найден или формат не поддерживается FFmpeg.');
-
   const plan = planCinemaMediaConversion({
     originalName: initial.originalName || sourcePath,
     streams,
