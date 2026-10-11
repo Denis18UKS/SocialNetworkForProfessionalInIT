@@ -1,6 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 const { execFile, spawn } = require('child_process');
+const { planCinemaMediaConversion } = require('./cinema-media-codecs');
+// SOCIALBIRD_CPARTY_OWN_VIDEO_NORMALIZATION_V1: codec-plan
 
 const [jobFile, sourcePath, mediaRoot] = process.argv.slice(2);
 if (!jobFile || !sourcePath || !mediaRoot) process.exit(2);
@@ -41,9 +43,6 @@ const runFfmpeg = (args) => new Promise((resolve, reject) => {
   });
 });
 
-const normalizedExt = (value) => path.extname(String(value || '')).toLowerCase();
-const compatibleMp4Audio = (audio) => !audio || audio.codec_name === 'aac';
-const compatibleH264PixelFormat = (video) => ['yuv420p', 'yuvj420p'].includes(String(video?.pix_fmt || '').toLowerCase());
 const safeTargetName = (value) => {
   const name = path.basename(String(value || ''));
   return /^[a-zA-Z0-9._-]+\.mp4$/i.test(name) ? name : null;
@@ -68,15 +67,22 @@ const main = async () => {
   const audio = streams.find((stream) => stream.codec_type === 'audio');
   if (!video?.codec_name) throw new Error('Видео-поток не найден или формат не поддерживается FFmpeg.');
 
-  const sourceExt = normalizedExt(initial.originalName || sourcePath);
-  const browserH264 = video.codec_name === 'h264' && compatibleH264PixelFormat(video);
-  const directMp4 = sourceExt === '.mp4' && browserH264 && compatibleMp4Audio(audio);
-
-  let recompressed = false;
-  let videoRecompressed = false;
-  let audioRecompressed = false;
-  let remuxed = false;
-  let conversionMode = 'none';
+  const plan = planCinemaMediaConversion({
+    originalName: initial.originalName || sourcePath,
+    streams,
+  });
+  const {
+    video,
+    audio,
+    directMp4,
+    canCopyVideo,
+    canCopyAudio,
+    recompressed,
+    videoRecompressed,
+    audioRecompressed,
+    remuxed,
+    conversionMode,
+  } = plan;
 
   if (directMp4) {
     await writeStatus({ status: 'processing', stage: 'finalize', conversionMode: 'none' });
@@ -84,13 +90,6 @@ const main = async () => {
     await fs.promises.rename(sourcePath, finalPath);
   } else {
     const tempPath = path.join(mediaRoot, `.${targetName}.${process.pid}.tmp.mp4`);
-    const canCopyVideo = browserH264;
-    const canCopyAudio = compatibleMp4Audio(audio);
-    videoRecompressed = !canCopyVideo;
-    audioRecompressed = Boolean(audio) && !canCopyAudio;
-    recompressed = videoRecompressed || audioRecompressed;
-    remuxed = canCopyVideo && canCopyAudio;
-    conversionMode = remuxed ? 'remux' : (canCopyVideo ? 'audio-transcode' : 'transcode');
     await writeStatus({ status: 'processing', stage: conversionMode, conversionMode });
 
     const args = [

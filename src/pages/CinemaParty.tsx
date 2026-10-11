@@ -48,6 +48,7 @@ const CinemaParty = () => {
   const [titleId, setTitleId] = useState<number | null>(null);
   const [mediaUrl, setMediaUrl] = useState("");
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadStage, setUploadStage] = useState<"uploading" | "processing" | "ready">("uploading");
   const [busy, setBusy] = useState(false);
 
   const load = async () => {
@@ -91,12 +92,21 @@ const CinemaParty = () => {
     if (!file) return;
     setBusy(true);
     setUploadProgress(1);
+    setUploadStage("uploading");
     try {
-      const result = await uploadCinemaVideo({ file, onProgress: setUploadProgress });
+      const result = await uploadCinemaVideo({
+        file,
+        onProgress: (percent, stage = "uploading") => {
+          setUploadProgress(percent);
+          setUploadStage(stage);
+        },
+      });
       setMediaUrl(result.mediaUrl);
+      setUploadStage("ready");
     } catch (error) {
       window.alert(error instanceof Error ? error.message : "Не удалось загрузить видео");
       setUploadProgress(0);
+      setUploadStage("uploading");
     } finally {
       setBusy(false);
     }
@@ -195,8 +205,8 @@ const CinemaParty = () => {
               ) : (
                 <div className="space-y-3 rounded-lg border p-4">
                   <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed p-6 text-sm hover:bg-muted"><Upload className="h-5 w-5" />Выбрать видео без сжатия<input type="file" accept="video/*,.mkv,.mov,.avi" className="hidden" onChange={handleUpload} /></label>
-                  {uploadProgress > 0 && <div className="text-sm">Загрузка оригинала: {uploadProgress}%</div>}
-                  {mediaUrl && <div className="text-sm text-emerald-600">Видео загружено без перекодирования.</div>}
+                  {uploadProgress > 0 && <div className="text-sm">{uploadStage === "processing" ? "Подготовка видео для браузера (для длинных фильмов может занять время)" : uploadStage === "ready" ? "Подготовка завершена" : "Загрузка оригинала"}: {uploadProgress}%</div>}
+                  {mediaUrl && <div className="text-sm text-emerald-600">Видео подготовлено для воспроизведения в браузере.</div>}
                 </div>
               )}
               <Button className="w-full" disabled={busy} onClick={createRoom}>{busy ? "Подготовка…" : "Создать комнату"}</Button>
