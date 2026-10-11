@@ -22,11 +22,18 @@ internal sealed class InstallerForm : Form
         if [ "$(id -u)" -ne 0 ]; then echo "Connect with a root account." >&2; exit 1; fi
         cd /opt/socialbird/current
         AVAILABLE_BYTES="$(df -PB1 . | awk 'NR == 2 { print $4 }')"
-        if [ -z "$AVAILABLE_BYTES" ] || [ "$AVAILABLE_BYTES" -lt 2147483648 ]; then
-          echo "Not enough free space. Free at least 2 GiB before running the installer." >&2
+        if [ -z "$AVAILABLE_BYTES" ] || [ "$AVAILABLE_BYTES" -lt 5368709120 ]; then
+          echo "Not enough free space for a full production update. Free at least 5 GiB before continuing." >&2
           df -h / >&2
           exit 1
         fi
+
+        echo "=== Full SocialBIRD production update ==="
+        sudo -u socialbird git fetch origin +deploy/socialbird-vps-production:refs/remotes/origin/deploy/socialbird-vps-production
+        sudo -u socialbird git checkout origin/deploy/socialbird-vps-production -- deploy/update-socialbird-media-playlist-unrestricted.sh
+        bash deploy/update-socialbird-media-playlist-unrestricted.sh
+
+        echo "=== Applying the C-Party own-video playback fix ==="
         sudo -u socialbird git fetch origin +fix/cparty-own-video-normalization-installer-20261011:refs/remotes/origin/fix/cparty-own-video-normalization-installer-20261011
         sudo -u socialbird git checkout origin/fix/cparty-own-video-normalization-installer-20261011 -- deploy/update-cparty-own-video-v1.sh
         bash deploy/update-cparty-own-video-v1.sh

@@ -87,7 +87,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = "socialbird-cparty-own-video-installer-preview"
-          $notes = "SocialBIRD C-Party own-video codec normalization, async preparation status, and standalone Windows VPS updater. Preview for an existing SocialBIRD VPS; does not reset the database or delete user media."
+          $notes = "SocialBIRD full production update for an already configured VPS, C-Party own-video codec normalization, and standalone Windows installer. It preserves the database and user media."
           gh release view $tag 2>$null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag artifacts/SocialBIRD-VPS-Installer.exe artifacts/SocialBIRD-Source.zip artifacts/SHA256SUMS.txt --clobber
