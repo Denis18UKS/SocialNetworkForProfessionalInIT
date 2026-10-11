@@ -49,7 +49,7 @@ test('C-Party own-video upload completes asynchronously and polls codec status',
   assert.match(server, /SOCIALBIRD_CPARTY_OWN_VIDEO_NORMALIZATION_V1: async-codec-normalization/);
   assert.match(server, /app\.get\('\/cinema\/uploads\/transcode\/:jobId', auth/);
   assert.match(server, /status\(202\)\.json/);
-  assert.match(uploader, /result\.processing/);
+  assert.match(uploader, /finalResult\.processing/);
   assert.match(uploader, /statusUrl/);
   assert.match(uploader, /onProgress\?\.\(96, "processing"\)/);
   assert.match(party, /Подготовка видео для браузера/);
