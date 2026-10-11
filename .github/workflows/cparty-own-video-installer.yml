@@ -1,0 +1,97 @@
+name: C-Party own-video normalization and VPS installer
+
+on:
+  push:
+    branches:
+      - fix/cparty-own-video-normalization-installer-20261011
+  pull_request:
+    branches:
+      - deploy/socialbird-vps-production
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cparty-own-video-installer-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Validate backend JavaScript
+        run: |
+          node --check backend/socialbird-final-platform.js
+          node --check backend/cinema-transcode-worker.js
+          node --check backend/cinema-media-codecs.js
+      - name: Run own-video codec regression tests
+        run: node --test tests/cparty-own-video-normalization.test.mjs
+      - name: Validate updater syntax
+        run: bash -n deploy/update-cparty-own-video-v1.sh
+      - name: Install frontend dependencies
+        run: npm install
+      - name: Build frontend
+        run: npm run build
+      - name: Check patch whitespace
+        run: git diff --check
+
+  package-windows:
+    needs: validate
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact tested source
+        uses: actions/checkout@v4
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Publish standalone Windows executable
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          dotnet publish tools/SocialBIRD-VPS-Installer/SocialBIRD-VPS-Installer.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o artifacts/publish
+          $exe = "artifacts/publish/SocialBIRD-VPS-Installer.exe"
+          if (-not (Test-Path $exe)) { throw "Installer executable was not created" }
+          if ((Get-Item $exe).Length -lt 5000000) { throw "Installer executable unexpectedly small" }
+          Copy-Item $exe "artifacts/SocialBIRD-VPS-Installer.exe" -Force
+      - name: Package latest source archive
+        shell: pwsh
+        run: |
+          git archive --format=zip --output=artifacts/SocialBIRD-Source.zip HEAD
+          if (-not (Test-Path "artifacts/SocialBIRD-Source.zip")) { throw "Source archive was not created" }
+          $exeHash = (Get-FileHash "artifacts/SocialBIRD-VPS-Installer.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          $srcHash = (Get-FileHash "artifacts/SocialBIRD-Source.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          @("SHA256SUMS:", "$exeHash  SocialBIRD-VPS-Installer.exe", "$srcHash  SocialBIRD-Source.zip") | Set-Content "artifacts/SHA256SUMS.txt" -Encoding ascii
+      - name: Upload installer and source archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: SocialBIRD-installer-and-source
+          path: |
+            artifacts/SocialBIRD-VPS-Installer.exe
+            artifacts/SocialBIRD-Source.zip
+            artifacts/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish downloadable preview assets
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/fix/cparty-own-video-normalization-installer-20261011')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "socialbird-cparty-own-video-installer-preview"
+          $notes = "SocialBIRD full production update for an already configured VPS, C-Party own-video codec normalization, and standalone Windows installer. It preserves the database and user media."
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag artifacts/SocialBIRD-VPS-Installer.exe artifacts/SocialBIRD-Source.zip artifacts/SHA256SUMS.txt --clobber
+            gh release edit $tag --title "SocialBIRD C-Party video fix + VPS Installer" --notes $notes --prerelease
+          } else {
+            gh release create $tag artifacts/SocialBIRD-VPS-Installer.exe artifacts/SocialBIRD-Source.zip artifacts/SHA256SUMS.txt --title "SocialBIRD C-Party video fix + VPS Installer" --notes $notes --prerelease
+          }

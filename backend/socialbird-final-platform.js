@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const jwt = require('jsonwebtoken');
 const express = require('express');
+const { spawn } = require('child_process');
 
 const EMAIL_CODE_TTL_MS = 10 * 60 * 1000;
 const EMAIL_CODE_COOLDOWN_SECONDS = 60;
@@ -635,15 +636,21 @@ const registerSocialBirdFinalPlatform = ({ app, db, verifyToken, transporter, no
         res.status(201).json(rows[0]);
     });
 
-    // ----- Cinema resumable uploads, original bytes only -----
+    // ----- Cinema resumable uploads and browser-compatible own-video playback -----
+    // SOCIALBIRD_CPARTY_OWN_VIDEO_NORMALIZATION_V1: async-codec-normalization
     const cinemaUploadsRoot = path.join(__dirname, 'uploads', 'cinema_chunks');
     const cinemaMediaRoot = path.join(__dirname, 'uploads', 'cinema_media');
+    const cinemaIncomingRoot = path.join(cinemaMediaRoot, '.incoming');
+    const cinemaTranscodeJobsRoot = path.join(cinemaMediaRoot, '.jobs');
+    const cinemaTranscodeWorker = path.join(__dirname, 'cinema-transcode-worker.js');
     const rawChunk = express.raw({ type: 'application/octet-stream', limit: CINEMA_UPLOAD_CHUNK_BYTES + 1024 * 1024 });
 
     app.post('/cinema/uploads', auth, async (req, res) => {
         await ensureSchema();
         await fs.promises.mkdir(cinemaUploadsRoot, { recursive: true });
         await fs.promises.mkdir(cinemaMediaRoot, { recursive: true });
+        await fs.promises.mkdir(cinemaIncomingRoot, { recursive: true });
+        await fs.promises.mkdir(cinemaTranscodeJobsRoot, { recursive: true });
         const userId = getUserId(req);
         const fileSize = Number(req.body?.fileSize || 0);
         const fileName = safeName(req.body?.fileName);
@@ -681,27 +688,116 @@ const registerSocialBirdFinalPlatform = ({ app, db, verifyToken, transporter, no
         const [rows] = await db.query('SELECT * FROM cinema_upload_sessions WHERE upload_id = ? AND user_id = ? LIMIT 1', [uploadId, userId]);
         if (!rows.length) return res.status(404).json({ message: 'Сессия загрузки не найдена.' });
         const session = rows[0];
-        const extension = path.extname(session.original_name).slice(0, 20);
-        const finalName = `${crypto.randomUUID()}${extension}`;
-        const finalPath = path.join(cinemaMediaRoot, finalName);
-        const output = fs.createWriteStream(finalPath, { flags: 'wx' });
+
+        await fs.promises.mkdir(cinemaIncomingRoot, { recursive: true });
+        await fs.promises.mkdir(cinemaTranscodeJobsRoot, { recursive: true });
+        const extension = path.extname(session.original_name).toLowerCase().replace(/[^.a-z0-9]/g, '').slice(0, 20) || '.video';
+        const incomingName = crypto.randomUUID() + extension;
+        const incomingPath = path.join(cinemaIncomingRoot, incomingName);
+        const output = fs.createWriteStream(incomingPath, { flags: 'wx' });
         let written = 0;
         try {
             for (let index = 0; index < Number(session.total_chunks); index += 1) {
-                const chunk = await fs.promises.readFile(path.join(cinemaUploadsRoot, uploadId, `${index}.part`));
+                const chunk = await fs.promises.readFile(path.join(cinemaUploadsRoot, uploadId, String(index) + '.part'));
                 written += chunk.length;
                 if (!output.write(chunk)) await new Promise((resolve) => output.once('drain', resolve));
             }
-            await new Promise((resolve, reject) => { output.end(resolve); output.on('error', reject); });
-            if (written !== Number(session.file_size)) throw new Error(`size mismatch ${written} != ${session.file_size}`);
+            await new Promise((resolve, reject) => {
+                output.once('error', reject);
+                output.end(resolve);
+            });
+            if (written !== Number(session.file_size)) throw new Error('size mismatch ' + written + ' != ' + session.file_size);
         } catch (error) {
             output.destroy();
-            await fs.promises.rm(finalPath, { force: true }).catch(() => undefined);
-            return res.status(409).json({ message: 'Не все части видео загружены. Продолжите загрузку и повторите.' });
+            await fs.promises.rm(incomingPath, { force: true }).catch(() => undefined);
+            console.error('C-Party upload assembly failed:', error?.message || error);
+            return res.status(409).json({ message: 'Не все части видео загружены. Повторите загрузку.' });
         }
+
         await fs.promises.rm(path.join(cinemaUploadsRoot, uploadId), { recursive: true, force: true });
         await db.query('DELETE FROM cinema_upload_sessions WHERE upload_id = ?', [uploadId]);
-        res.json({ complete: true, mediaUrl: `/cinema/media/${finalName}`, fileName: session.original_name, fileSize: Number(session.file_size), mimeType: session.mime_type, recompressed: false });
+
+        const jobId = crypto.randomUUID();
+        const targetName = crypto.randomUUID() + '.mp4';
+        const jobFile = path.join(cinemaTranscodeJobsRoot, jobId + '.json');
+        const job = {
+            jobId,
+            userId,
+            targetName,
+            status: 'queued',
+            stage: 'queued',
+            complete: false,
+            sourcePath: incomingPath,
+            originalName: session.original_name,
+            originalMimeType: session.mime_type,
+            originalFileSize: Number(session.file_size),
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+        };
+        await fs.promises.writeFile(jobFile, JSON.stringify(job), { flag: 'wx' });
+
+        try {
+            const child = spawn(process.execPath, [cinemaTranscodeWorker, jobFile, incomingPath, cinemaMediaRoot], {
+                detached: true,
+                stdio: 'ignore',
+                cwd: __dirname,
+                env: process.env,
+            });
+            child.once('error', (error) => {
+                void fs.promises.readFile(jobFile, 'utf8').then((raw) => {
+                    const current = JSON.parse(raw);
+                    return fs.promises.writeFile(jobFile, JSON.stringify({
+                        ...current,
+                        status: 'error',
+                        stage: 'error',
+                        complete: false,
+                        error: 'Не удалось запустить обработку видео: ' + error.message,
+                        finishedAt: new Date().toISOString(),
+                        updatedAt: new Date().toISOString(),
+                    }), 'utf8');
+                }).catch(() => undefined);
+            });
+            child.unref();
+        } catch (error) {
+            await fs.promises.rm(incomingPath, { force: true }).catch(() => undefined);
+            await fs.promises.rm(jobFile, { force: true }).catch(() => undefined);
+            return res.status(500).json({ message: 'Не удалось запустить подготовку видео: ' + error.message });
+        }
+
+        return res.status(202).json({
+            complete: false,
+            processing: true,
+            jobId,
+            statusUrl: '/cinema/uploads/transcode/' + jobId,
+            fileName: session.original_name,
+            fileSize: Number(session.file_size),
+            mimeType: session.mime_type,
+        });
+    });
+
+    app.get('/cinema/uploads/transcode/:jobId', auth, async (req, res) => {
+        const userId = getUserId(req);
+        const jobId = String(req.params.jobId || '');
+        if (!/^[0-9a-f-]{36}$/i.test(jobId)) return res.status(404).json({ message: 'Задание обработки не найдено.' });
+
+        const jobFile = path.join(cinemaTranscodeJobsRoot, jobId + '.json');
+        let job;
+        try {
+            job = JSON.parse(await fs.promises.readFile(jobFile, 'utf8'));
+        } catch {
+            return res.status(404).json({ message: 'Задание обработки не найдено.' });
+        }
+        if (Number(job.userId) !== userId) return res.status(404).json({ message: 'Задание обработки не найдено.' });
+
+        if (job.status === 'error' && job.sourcePath && !job.cleanupDone) {
+            await fs.promises.rm(job.sourcePath, { force: true }).catch(() => undefined);
+            job = { ...job, sourcePath: null, cleanupDone: true };
+            await fs.promises.writeFile(jobFile, JSON.stringify(job), 'utf8').catch(() => undefined);
+        }
+
+        const { sourcePath, userId: ownerId, ...safeJob } = job;
+        res.setHeader('Cache-Control', 'no-store');
+        return res.json(safeJob);
     });
 
     app.get('/cinema/media/:fileName', auth, async (req, res) => {
